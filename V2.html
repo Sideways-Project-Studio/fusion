@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Realistic D-T Fusion Sandbox - Advanced Controls</title>
+    <style>
+        body { margin: 0; background: #111; color: #fff; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
+        canvas { background: #000; border: 1px solid #222; box-shadow: 0 0 20px rgba(0,150,255,0.1); }
+        #interface { margin-top: 15px; display: flex; flex-direction: column; align-items: center; gap: 10px; width: 900px; }
+        #controls { display: flex; gap: 12px; align-items: center; width: 100%; justify-content: center; flex-wrap: wrap; }
+        .slider-container { display: flex; align-items: center; gap: 10px; background: #222; padding: 6px 14px; border-radius: 4px; border: 1px solid #333; }
+        button { background: #0088cc; color: white; border: none; padding: 10px 16px; font-size: 14px; cursor: pointer; border-radius: 4px; font-weight: bold; transition: background 0.2s; }
+        button:hover { background: #00aaff; }
+        .btn-inject { background: #22c55e; }
+        .btn-inject:hover { background: #16a34a; }
+        #stats { margin-top: 10px; font-size: 16px; font-family: monospace; color: #ffcc00; text-align: center; line-height: 1.5; }
+        #legend { margin-top: 8px; display: flex; gap: 20px; font-size: 14px; }
+        .legend-item { display: flex; align-items: center; gap: 6px; }
+        .legend-dot { border-radius: 50%; display: inline-block; }
+        label { font-size: 14px; color: #aaa; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <canvas id="simCanvas" width="800" height="680"></canvas>
+    
+    <div id="stats">
+        Plasma Temp: 0 eV | Debye Length (&lambda;<sub>D</sub>): 0px<br>
+        Fusions Triggered: 0
+    </div>
+
+    <div id="legend">
+        <span class="legend-item"><span class="legend-dot" style="width:10px;height:10px;background:#ff4444;"></span> Deuterium (D)</span>
+        <span class="legend-item"><span class="legend-dot" style="width:12px;height:12px;background:#ffaa00;"></span> Tritium (T)</span>
+        <span class="legend-item"><span class="legend-dot" style="width:14px;height:14px;background:#00ffcc;"></span> Alpha (He-4)</span>
+        <span class="legend-item"><span class="legend-dot" style="width:6px;height:6px;background:#ffffff;"></span> Fast Neutron</span>
+    </div>
+
+    <div id="interface">
+        <div id="controls">
+            <div class="slider-container">
+                <label for="densitySlider">Fuel Density:</label>
+                <input type="range" id="densitySlider" min="10" max="150" value="50" oninput="adjustDensity()">
+                <span id="densityVal">50 pairs</span>
+            </div>
+            
+            <div class="slider-container">
+                <label for="magSlider">Magnetic Field (B₀):</label>
+                <input type="range" id="magSlider" min="0" max="500" value="35" oninput="adjustMagnet()">
+                <span id="magVal">0.35 T</span>
+            </div>
+
+            <div class="slider-container">
+                <label for="heatSlider">Heating Power:</label>
+                <input type="range" id="heatSlider" min="1" max="1000" value="60" oninput="adjustHeatingPower()">
+                <span id="heatVal">0.60 MW</span>
+            </div>
+
+            <button class="btn-inject" onclick="injectFuel()">Inject Fuel (+10 Pairs)</button>
+            <button onclick="injectHeat()">Inject Heat</button>
+            <button style="background: #4b5563;" onclick="resetSim()">Reset Chamber</button>
+        </div>
+    </div>
+
+<script>
+const canvas = document.getElementById('simCanvas');
+const ctx = canvas.getContext('2d');
+const cx = canvas.width / 2;
+const cy = canvas.height / 2;
+const radius = 280; 
+const vesselRadius = 350;
+        
+// Physics Constants
+const COULOMB_K = 80;         
+const FUSION_RADIUS = 6;      
+let B0 = 0.35;                
+const DAMPING = 0.992;        
+const SOFTENING_SQ = 64;      
+        
+let particles = [];
+let fusionCount = 0;
+let currentDensitySetting = 50;
+let debyeLength = 30;
+let isHeating = false;
+let heatingRate = 0.6; // Controlled dynamically by slider now
+        
+function randomNormal() {
+    let u = 0, v = 0;
+    while(u === 0) u = Math.random(); 
+    while(v === 0) v = Math.random();
+    return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+}
+        
+class Particle {
+    constructor(type, x, y) {
+        this.type = type;
+        this.x = x; 
+        this.y = y;
+        this.vx = 0;
+        this.vy = 0;
+        
+        if (type === 'D') {
+            this.mass = 2; this.charge = 1; this.color = '#ff4444'; this.size = 5;
+        } else if (type === 'T') {
+            this.mass = 3; this.charge = 1; this.color = '#ffaa00'; this.size = 6;
+        } else if (type === 'alpha') {
+            this.mass = 4; this.charge = 2; this.color = '#00ffcc'; this.size = 8;
+        } else if (type === 'n') {
+            this.mass = 1; this.charge = 0; this.color = '#ffffff'; this.size = 3;
+        }
+    }
+}
+        
+function adjustDensity() {
+    currentDensitySetting = parseInt(document.getElementById('densitySlider').value);
+    document.getElementById('densityVal').textContent = currentDensitySetting + " pairs";
+    resetSim();
+}
+
+function adjustMagnet() {
+    let sliderVal = parseInt(document.getElementById('magSlider').value);
+    B0 = sliderVal / 100;
+    document.getElementById('magVal').textContent = B0.toFixed(2) + " T";
+}
+
+function adjustHeatingPower() {
+    let sliderVal = parseInt(document.getElementById('heatSlider').value);
+    heatingRate = sliderVal / 100;
+    document.getElementById('heatVal').textContent = heatingRate.toFixed(2) + " MW";
+}
+
+function injectFuel() {
+    for(let i = 0; i < 10; i++) {
+        let angleD = Math.random() * Math.PI * 2;
+        let rD = Math.sqrt(Math.random()) * (radius * 0.5);
+        let pD = new Particle('D', cx + Math.cos(angleD) * rD, cy + Math.sin(angleD) * rD);
+        
+        let angleT = Math.random() * Math.PI * 2;
+        let rT = Math.sqrt(Math.random()) * (radius * 0.5);
+        let pT = new Particle('T', cx + Math.cos(angleT) * rT, cy + Math.sin(angleT) * rT);
+        
+        pD.vx = randomNormal() * 0.5; pD.vy = randomNormal() * 0.5;
+        pT.vx = randomNormal() * 0.4; pT.vy = randomNormal() * 0.4;
+        
+        particles.push(pD, pT);
+    }
+}
+        
+function injectHeat() {
+    isHeating = !isHeating;
+    const btn = document.querySelector("button[onclick='injectHeat()']");
+    if (isHeating) {
+        btn.textContent = "Heaters: ON";
+        btn.style.background = "#ff4444";
+    } else {
+        btn.textContent = "Inject Heat";
+        btn.style.background = "#0088cc";
+    }
+}
+        
+function resetSim() {
+    particles = [];
+    fusionCount = 0;
+    isHeating = false;
+    
+    const btn = document.querySelector("button[onclick='injectHeat()']");
+    if (btn) {
+        btn.textContent = "Inject Heat";
+        btn.style.background = "#0088cc";
+    }
+    
+    let targetCount = currentDensitySetting;
+    for(let i = 0; i < targetCount; i++) {
+        let angleD = Math.random() * Math.PI * 2;
+        let rD = Math.sqrt(Math.random()) * (radius * 0.8); 
+        let pD = new Particle('D', cx + Math.cos(angleD) * rD, cy + Math.sin(angleD) * rD);
+        
+        let initTempFactor = 1.2;
+        pD.vx = randomNormal() * (initTempFactor / Math.sqrt(pD.mass));
+        pD.vy = randomNormal() * (initTempFactor / Math.sqrt(pD.mass));
+        particles.push(pD);
+
+        let angleT = Math.random() * Math.PI * 2;
+        let rT = Math.sqrt(Math.random()) * (radius * 0.8);
+        let pT = new Particle('T', cx + Math.cos(angleT) * rT, cy + Math.sin(angleT) * rT);
+        pT.vx = randomNormal() * (initTempFactor / Math.sqrt(pT.mass));
+        pT.vy = randomNormal() * (initTempFactor / Math.sqrt(pT.mass));
+        particles.push(pT);
+    }
+}
+        
+function updatePhysics() {
+    if (isHeating) {
+        particles.forEach(p => {
+            if (p.type === 'D' || p.type === 'T') {
+                let kick = heatingRate / Math.sqrt(p.mass);
+                p.vx += randomNormal() * kick;
+                p.vy += randomNormal() * kick;
+                
+                let dx = p.x - cx;
+                let dy = p.y - cy;
+                let dist = Math.sqrt(dx*dx + dy*dy) || 1;
+                p.vx += (-dy / dist) * 0.04;
+                p.vy += (dx / dist) * 0.04;
+            }
+        });
+    }
+        
+    let totalKE = 0;
+    let fuelCount = 0;
+    particles.forEach(p => {
+        if (p.type === 'D' || p.type === 'T') {
+            totalKE += 0.5 * p.mass * (p.vx * p.vx + p.vy * p.vy);
+            fuelCount++;
+        }
+    });
+    let avgEnergy = fuelCount > 0 ? (totalKE / fuelCount) : 0;
+    
+    debyeLength = Math.sqrt((avgEnergy + 0.1) / ((fuelCount + 5) / 100)) * 5;
+    if (debyeLength < 8) debyeLength = 8;
+    if (debyeLength > 60) debyeLength = 60;
+        
+    // 1. Charged Inter-particle Forces & Universal Hard Elastic Collisions
+    for (let i = 0; i < particles.length; i++) {
+        let p1 = particles[i];
+        for (let j = i + 1; j < particles.length; j++) {
+            let p2 = particles[j];
+        
+            if (p1.charge > 0 && p2.charge > 0) {
+                let dx = p2.x - p1.x;
+                let dy = p2.y - p1.y;
+                let distSq = dx * dx + dy * dy;
+                let dist = Math.sqrt(distSq) || 0.1;
+                
+                let minDist = p1.size + p2.size; 
+
+                if (dist < minDist) {
+                    let nx = dx / dist;
+                    let ny = dy / dist;
+                    
+                    let kx = p1.vx - p2.vx;
+                    let ky = p1.vy - p2.vy;
+                    
+                    let vn = kx * nx + ky * ny;
+                    
+                    if (vn > 0) {
+                        let impulse = (2 * vn) / (p1.mass + p2.mass);
+                        
+                        p1.vx -= impulse * p2.mass * nx;
+                        p1.vy -= impulse * p2.mass * ny;
+                        p2.vx += impulse * p1.mass * nx;
+                        p2.vy += impulse * p1.mass * ny;
+                    }
+                    
+                    let overlap = minDist - dist;
+                    p1.x -= nx * overlap * 0.5;
+                    p1.y -= ny * overlap * 0.5;
+                    p2.x += nx * overlap * 0.5;
+                    p2.y += ny * overlap * 0.5;
+                    continue; 
+                }
+        
+                if (dist < debyeLength * 1.8) {
+                    let ux = dx / dist;
+                    let uy = dy / dist;
+        
+                    let fc = (COULOMB_K * p1.charge * p2.charge) / (distSq + 10);
+                    let shieldingFactor = Math.exp(-dist / debyeLength);
+                    fc *= shieldingFactor;
+        
+                    if (fc > 30) fc = 30;
+        
+                    p1.vx -= (ux * fc) / p1.mass;
+                    p1.vy -= (uy * fc) / p1.mass;
+                    p2.vx += (ux * fc) / p2.mass;
+                    p2.vy += (uy * fc) / p2.mass;
+                }
+            }
+        }
+        if (p1.type === 'D' || p1.type === 'T') {
+            p1.vx *= DAMPING;
+            p1.vy *= DAMPING;
+        }
+    }
+        
+    // 2. Magnetic Lorentz Step
+    particles.forEach(p => {
+        if (p.charge > 0 && B0 > 0) {
+            let t = (p.charge * B0) / p.mass;
+            let vxOld = p.vx; 
+            let vyOld = p.vy;
+            let denom = 1 + t * t;
+        
+            p.vx = ((1 - t * t) * vxOld + 2 * t * vyOld) / denom;
+            p.vy = (-2 * t * vxOld + (1 - t * t) * vyOld) / denom;
+        }
+    });
+        
+    // 3. Position Step
+    particles.forEach(p => {
+        p.x += p.vx * 0.15;
+        p.y += p.vy * 0.15;
+    });
+        
+    // 4. Boundary Confinement
+    particles = particles.filter(p => {
+        let d = Math.sqrt((p.x - cx)**2 + (p.y - cy)**2);
+        if (d > vesselRadius) {
+            if (p.type === 'n' || p.type === 'alpha') return false; 
+            
+            let nx = (p.x - cx) / d;
+            let ny = (p.y - cy) / d;
+            let dot = p.vx * nx + p.vy * ny;
+            p.vx -= 2 * dot * nx;
+            p.vy -= 2 * dot * ny;
+            p.vx *= 0.1; 
+            p.vy *= 0.1;
+            p.x = cx + nx * (vesselRadius - 4);
+            p.y = cy + ny * (vesselRadius - 4);
+        }
+        return true;
+    });
+        
+    // 5. Fusion Interaction Filter
+    for (let i = 0; i < particles.length; i++) {
+        let p1 = particles[i];
+        if (p1.type !== 'D') continue;
+        
+        for (let j = 0; j < particles.length; j++) {
+            let p2 = particles[j];
+            if (p2.type !== 'T') continue;
+        
+            let dx = p2.x - p1.x;
+            let dy = p2.y - p1.y;
+            let dist = Math.sqrt(dx * dx + dy * dy);
+        
+            if (dist < FUSION_RADIUS) {
+                let rvx = p2.vx - p1.vx;
+                let rvy = p2.vy - p1.vy;
+                let approachSpeed = -(rvx * dx + rvy * dy) / dist;
+        
+                if (approachSpeed > 4.5) {
+                    let relativeEnergy = 0.5 * (rvx * rvx + rvy * rvy);
+                    if (relativeEnergy > 75) { 
+                        executeFusion(i, j);
+                        return; 
+                    }
+                }
+            }
+        }
+    }
+}
+        
+function executeFusion(idxD, idxT) {
+    let p1 = particles[idxD]; let p2 = particles[idxT];
+    let spawnX = (p1.x + p2.x) / 2; let spawnY = (p1.y + p2.y) / 2;
+        
+    particles = particles.filter((p, idx) => idx !== idxD && idx !== idxT);
+        
+    let alpha = new Particle('alpha', spawnX, spawnY);
+    let neutron = new Particle('n', spawnX, spawnY);
+        
+    let angle = Math.random() * Math.PI * 2;
+    let neutronSpeed = 65; 
+    let alphaSpeed = neutronSpeed * (neutron.mass / alpha.mass); 
+        
+    alpha.vx = -Math.cos(angle) * alphaSpeed;
+    alpha.vy = -Math.sin(angle) * alphaSpeed;
+            
+    neutron.vx = Math.cos(angle) * neutronSpeed;
+    neutron.vy = Math.sin(angle) * neutronSpeed;
+        
+    particles.push(alpha, neutron);
+    fusionCount++;
+}
+        
+const EV_SCALE = 180;
+const statsEl = document.getElementById('stats');
+        
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+    for (let r = 70; r <= radius; r += 70) {
+        ctx.strokeStyle = 'rgba(0,150,255,0.06)';
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+    }
+            
+    ctx.strokeStyle = '#252525'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(cx, cy, vesselRadius, 0, Math.PI * 2); ctx.stroke();
+        
+    particles.forEach(p => {
+        ctx.fillStyle = p.color;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+                
+        if (p.type === 'alpha' || p.type === 'n') {
+            ctx.strokeStyle = p.color + '33';
+            ctx.beginPath(); ctx.moveTo(p.x, p.y);
+            ctx.lineTo(p.x - p.vx * 0.3, p.y - p.vy * 0.3); ctx.stroke();
+        }
+    });
+        
+    let totalKE = 0;
+    let fuelCount = 0;
+    particles.forEach(p => {
+        if (p.type === 'D' || p.type === 'T') {
+            totalKE += 0.5 * p.mass * (p.vx * p.vx + p.vy * p.vy);
+            fuelCount++;
+        }
+    });
+    let avgEV = fuelCount > 0 ? (totalKE / fuelCount) * EV_SCALE : 0;
+    let label = avgEV >= 1000 ? (avgEV / 1000).toFixed(2) + ' keV' : avgEV.toFixed(1) + ' eV';
+        
+    statsEl.innerHTML = `Plasma Temp: <strong>${label}</strong> | Debye Length (&lambda;<sub>D</sub>): <strong>${debyeLength.toFixed(1)}px</strong><br>Fusions Triggered: <span style="color:#00ffcc;"><strong>${fusionCount}</strong></span>`;
+}
+        
+function loop() {
+    updatePhysics();
+    draw();
+    requestAnimationFrame(loop);
+}
+        
+resetSim();
+loop();
+</script>
+</body>
+</html>

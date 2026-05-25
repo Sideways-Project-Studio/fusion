@@ -5,7 +5,7 @@
     <title>D-T Fusion Sandbox</title>
     <style>
         body { margin: 0; background: #111; color: #fff; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
-        canvas { background: #000; border: 2px solid #333; border-radius: 50%; box-shadow: 0 0 20px rgba(0,255,255,0.1); }
+        canvas { background: #000; border: 1px solid #222; box-shadow: 0 0 20px rgba(0,150,255,0.1); }
         #controls { margin-top: 15px; display: flex; gap: 10px; }
         button { background: #0088cc; color: white; border: none; padding: 10px 20px; font-size: 16px; cursor: pointer; border-radius: 4px; }
         button:hover { background: #00aaff; }
@@ -17,7 +17,7 @@
 </head>
 <body>
 
-    <canvas id="simCanvas" width="600" height="600"></canvas>
+    <canvas id="simCanvas" width="900" height="900"></canvas>
     
     <div id="stats">Plasma Energy: 0 eV</div>
 
@@ -37,7 +37,24 @@ const canvas = document.getElementById('simCanvas');
 const ctx = canvas.getContext('2d');
 const cx = canvas.width / 2;
 const cy = canvas.height / 2;
-const radius = 280; // Containment wall radius
+const radius = 280;
+const B0 = 0.15;
+const vesselRadius = 420;
+
+// Yukawa potential: V(r) = -g * exp(-r/λ) / r
+// Force: F(r) = g * exp(-r/λ) * (1/r² + 1/(rλ))  (positive = repulsive toward)
+const YUKAWA_ATTRACT = 300;   // Attractive well strength
+const YUKAWA_RANGE   = 8;     // Pion-exchange range (px)
+const CORE_REPULSE   = 804;   // Hard core repulsion strength
+const CORE_RANGE     = 2.5;   // Core range (px)
+const NUCLEAR_CUTOFF = 25;    // Beyond this, nuclear force negligible
+const R_EQUILIBRIUM  = 6;     // Nucleon equilibrium separation (px)
+
+// Coulomb: F = k_c * q1 * q2 / r²
+const COULOMB_K      = 88;    // Scaled so barrier requires real energy to overcome
+const DEBYE_CUTOFF   = 60;    // Electron screening distance (px)
+
+const DAMPING = 0.98;          // Background radiation cooling (Bremsstrahlung losses)
 
 let particles = [];
 
@@ -76,14 +93,33 @@ function resetSim() {
             let nid = nextNucleusId++;
 
             if (idx < 15) {
-                // Deuterium (1p + 1n)
-                particles.push(new Particle('p', rx, ry, nid));
-                particles.push(new Particle('n', rx, ry, nid));
+                // Deuterium (1p + 1n) at equilibrium separation + initial thermal drift
+                let p = new Particle('p', rx - R_EQUILIBRIUM/2, ry, nid);
+                let n = new Particle('n', rx + R_EQUILIBRIUM/2, ry, nid);
+
+                let initVx = (Math.random() - 0.5) * 4;
+                let initVy = (Math.random() - 0.5) * 4;
+                p.vx = initVx; p.vy = initVy;
+                n.vx = initVx; n.vy = initVy;
+
+                particles.push(p);
+                particles.push(n);
             } else {
-                // Tritium (1p + 2n)
-                particles.push(new Particle('p', rx, ry, nid));
-                particles.push(new Particle('n', rx, ry, nid));
-                particles.push(new Particle('n', rx, ry, nid));
+                // Tritium (1p + 2n) + initial thermal drift
+                let d = R_EQUILIBRIUM * 0.577;
+                let p = new Particle('p', rx, ry - d, nid);
+                let n1 = new Particle('n', rx - R_EQUILIBRIUM/2, ry + d/2, nid);
+                let n2 = new Particle('n', rx + R_EQUILIBRIUM/2, ry + d/2, nid);
+
+                let initVx = (Math.random() - 0.5) * 4;
+                let initVy = (Math.random() - 0.5) * 4;
+                p.vx = initVx; p.vy = initVy;
+                n1.vx = initVx; n1.vy = initVy;
+                n2.vx = initVx; n2.vy = initVy;
+
+                particles.push(p);
+                particles.push(n1);
+                particles.push(n2);
             }
             idx++;
         }
@@ -119,103 +155,96 @@ function injectHeat() {
 }
 
 function updatePhysics() {
-    // 1. Calculate forces only between particles in DIFFERENT nuclei or unbound
+    // 1. Calculate inter-particle forces (all particles feel each other)
     for (let i = 0; i < particles.length; i++) {
         let p1 = particles[i];
         for (let j = i + 1; j < particles.length; j++) {
             let p2 = particles[j];
 
-            // Bound nucleons in the same nucleus exert no force on each other
-            if (p1.nucleusId >= 0 && p1.nucleusId === p2.nucleusId) continue;
-
             let dx = p2.x - p1.x;
             let dy = p2.y - p1.y;
-            let dist = Math.sqrt(dx*dx + dy*dy) || 0.001;
+            let dist = Math.sqrt(dx*dx + dy*dy) || 0.01;
 
             let fx = 0; let fy = 0;
+            let ux = dx / dist, uy = dy / dist;
 
-            // Coulomb repulsion with Debye screening (electrons neutralise at range)
-            if (p1.charge > 0 && p2.charge > 0 && p1.type !== 'alpha' && p2.type !== 'alpha' && dist < 40) {
-                let coulomb = 60 / (dist * dist);
-                fx -= (dx / dist) * coulomb;
-                fy -= (dy / dist) * coulomb;
+            // Coulomb: F = k * q1 * q2 / r^2 (with Debye screening)
+            if (p1.charge > 0 && p2.charge > 0 && p1.type !== 'alpha' && p2.type !== 'alpha' && dist < DEBYE_CUTOFF) {
+                let fc = COULOMB_K * p1.charge * p2.charge / (dist * dist);
+                fx -= ux * fc;
+                fy -= uy * fc;
             }
 
-            // Strong nuclear attraction (short range, only between free nucleons)
-            if (dist < 15 && p1.type !== 'alpha' && p2.type !== 'alpha') {
-                let nuclear = 12 * Math.exp(-0.08 * dist);
-                fx += (dx / dist) * nuclear;
-                fy += (dy / dist) * nuclear;
+            // Yukawa nuclear force (attractive well + repulsive core)
+            if (dist < NUCLEAR_CUTOFF && p1.type !== 'alpha' && p2.type !== 'alpha') {
+                let expA = Math.exp(-dist / YUKAWA_RANGE);
+                let fAttract = YUKAWA_ATTRACT * expA * (1/(dist*dist) + 1/(dist*YUKAWA_RANGE));
+
+                let expC = Math.exp(-dist / CORE_RANGE);
+                let fRepulse = CORE_REPULSE * expC * (1/(dist*dist) + 1/(dist*CORE_RANGE));
+
+                let fNuclear = fAttract - fRepulse;
+                fx += ux * fNuclear;
+                fy += uy * fNuclear;
+            }
+
+            // Stable cap to prevent Euler integration explosions
+            let netF = Math.sqrt(fx * fx + fy * fy);
+            const MAX_FORCE = 150;
+            if (netF > MAX_FORCE) {
+                fx = (fx / netF) * MAX_FORCE;
+                fy = (fy / netF) * MAX_FORCE;
             }
 
             p1.vx += fx; p1.vy += fy;
             p2.vx -= fx; p2.vy -= fy;
         }
+
+        // Bremsstrahlung radiation cooling
+        p1.vx *= DAMPING;
+        p1.vy *= DAMPING;
     }
 
-    // 2. Move bound nuclei as rigid bodies (all nucleons share center-of-mass velocity)
-    let nuclei = {};
-    particles.forEach(p => {
-        if (p.nucleusId < 0) return;
-        if (!nuclei[p.nucleusId]) nuclei[p.nucleusId] = [];
-        nuclei[p.nucleusId].push(p);
-    });
-    for (let nid in nuclei) {
-        let group = nuclei[nid];
-        let avgVx = 0, avgVy = 0;
-        group.forEach(p => { avgVx += p.vx; avgVy += p.vy; });
-        avgVx /= group.length; avgVy /= group.length;
-        let comX = 0, comY = 0;
-        group.forEach(p => { comX += p.x; comY += p.y; });
-        comX /= group.length; comY /= group.length;
+    // 2. Stable 2D Boris Rotator for Magnetic Confinement
+    for (let i = 0; i < particles.length; i++) {
+        let p1 = particles[i];
+        let q = p1.charge;
+        if (p1.type === 'alpha') q = 2;
 
-        // Check if internal spread has exceeded binding threshold
-        let maxSpread = 0;
-        group.forEach(p => {
-            let d = Math.sqrt((p.x - comX) ** 2 + (p.y - comY) ** 2);
-            if (d > maxSpread) maxSpread = d;
-        });
+        if (q > 0) {
+            let r = Math.sqrt((p1.x - cx)**2 + (p1.y - cy)**2) || 1;
+            let rNorm = r / radius;
+            let B = B0 * rNorm * rNorm;
 
-        if (maxSpread > 18) {
-            // Nucleus breaks apart -- unbind all nucleons
-            group.forEach(p => { p.nucleusId = -1; });
-        } else {
-            // Snap all nucleons to move as one rigid body
-            group.forEach(p => { p.vx = avgVx; p.vy = avgVy; });
+            let t = q * B * 0.1;
+            let vxOld = p1.vx; let vyOld = p1.vy;
+            let denominator = 1 + t * t;
+
+            p1.vx = ((1 - t * t) * vxOld + 2 * t * vyOld) / denominator;
+            p1.vy = (-2 * t * vxOld + (1 - t * t) * vyOld) / denominator;
         }
     }
 
-    // 3. Integrate positions and handle containment walls
+    // 3. Integrate Positions
     for (let i = 0; i < particles.length; i++) {
         let p1 = particles[i];
         p1.x += p1.vx * 0.1;
         p1.y += p1.vy * 0.1;
-
-        let distFromCenter = Math.sqrt((p1.x - cx)**2 + (p1.y - cy)**2);
-        if (distFromCenter > radius) {
-            // Bound nucleons bounce with their nucleus (field holds the whole ion)
-            // Free neutrons escape -- they have no charge for the field to grip
-            let confined = p1.nucleusId >= 0 || p1.charge > 0;
-            if (confined) {
-                let nx = (p1.x - cx) / distFromCenter;
-                let ny = (p1.y - cy) / distFromCenter;
-                let dot = p1.vx * nx + p1.vy * ny;
-                p1.vx -= 2 * dot * nx;
-                p1.vy -= 2 * dot * ny;
-                p1.x = cx + nx * (radius - 2);
-                p1.y = cy + ny * (radius - 2);
-            }
-        }
     }
 
-    // 4. Simple Check-and-Trigger Fusion Event
+    // 4. Boundary Removal
+    particles = particles.filter(p => {
+        let d = Math.sqrt((p.x - cx)**2 + (p.y - cy)**2);
+        return d < vesselRadius;
+    });
+
+    // 5. Quantum Tunneling & Fusion Check
     for (let i = 0; i < particles.length; i++) {
         for (let j = i + 1; j < particles.length; j++) {
             let p1 = particles[i]; let p2 = particles[j];
             if (p1.type === 'p' && p2.type === 'p') {
                 let dist = Math.sqrt((p2.x - p1.x)**2 + (p2.y - p1.y)**2);
-                // Quantum Tunneling Check: Closer they are, higher the lottery chance
-                if (dist < 6 && Math.random() < 0.05) { 
+                if (dist < 6 && Math.random() < 0.05) {
                     triggerFusion(p1, p2);
                     return;
                 }
@@ -258,9 +287,18 @@ const statsEl = document.getElementById('stats');
 function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    // Draw Containment Ring
-    ctx.strokeStyle = '#222'; ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.stroke();
+    // Draw magnetic field gradient (concentric rings, stronger toward edge)
+    for (let r = 70; r <= radius; r += 70) {
+        let alpha = 0.04 + 0.12 * (r / radius) * (r / radius);
+        ctx.strokeStyle = 'rgba(0,150,255,' + alpha + ')';
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+    }
+    // Vessel wall (physical boundary)
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 2;
+    ctx.setLineDash([8, 6]);
+    ctx.beginPath(); ctx.arc(cx, cy, vesselRadius, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
 
     // Draw Particles
     particles.forEach(p => {
