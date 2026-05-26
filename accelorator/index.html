@@ -166,6 +166,29 @@
                 <input type="range" id="impactOffsetSlider" min="0" max="2.0" value="0.2" step="0.05">
             </div>
         </div>
+        <div class="control-row" style="border-top:1px solid #334155; padding-top:8px; margin-top:2px;">
+            <span style="font-size:12px; color:#94a3b8; font-weight:600; letter-spacing:0.5px;">SLOWDOWN</span>
+        </div>
+        <div class="control-row">
+            <div class="slider-group">
+                <label for="approachMinSlider">Approach Min: <span id="approachMinValue">5</span>%</label>
+                <input type="range" id="approachMinSlider" min="1" max="100" value="5" step="1">
+            </div>
+            <div class="slider-group">
+                <label for="approachRangeSlider">Approach Range: <span id="approachRangeValue">200</span>px</label>
+                <input type="range" id="approachRangeSlider" min="50" max="500" value="200" step="10">
+            </div>
+        </div>
+        <div class="control-row">
+            <div class="slider-group">
+                <label for="fusionMinSlider">Fusion Min: <span id="fusionMinValue">3</span>%</label>
+                <input type="range" id="fusionMinSlider" min="1" max="100" value="3" step="1">
+            </div>
+            <div class="slider-group">
+                <label for="fusionRecoverySlider">Fusion Recovery: <span id="fusionRecoveryValue">2</span></label>
+                <input type="range" id="fusionRecoverySlider" min="1" max="50" value="2" step="1">
+            </div>
+        </div>
     </div>
 
     <canvas id="physicsCanvas" width="900" height="550"></canvas>
@@ -207,8 +230,15 @@
         let deuteriumAssembled = false;
         let tritiumAssembled = false;
         let reactionTriggered = false;
+        let fusionOccurred = false;
+        let fusionSlowFactor = 1.0;
         let timeScale = 1.0;
         let currentKeV = 15;
+
+        let approachMinDt = 0.05;
+        let approachRange = 200;
+        let fusionMinDt = 0.03;
+        let fusionRecoveryRate = 0.002;
         
         const KE = 1000;
         
@@ -304,7 +334,24 @@
         document.getElementById('timeSlider').addEventListener('input', (e) => setTimeScale(parseFloat(e.target.value)));
         document.querySelectorAll('.speed-btn').forEach(b => b.addEventListener('click', () => setTimeScale(parseFloat(b.dataset.speed))));
         document.getElementById('btnReset').addEventListener('click', resetEngineEnvironment);
-        
+
+        document.getElementById('approachMinSlider').addEventListener('input', (e) => {
+            approachMinDt = parseFloat(e.target.value) / 100;
+            document.getElementById('approachMinValue').innerText = e.target.value;
+        });
+        document.getElementById('approachRangeSlider').addEventListener('input', (e) => {
+            approachRange = parseFloat(e.target.value);
+            document.getElementById('approachRangeValue').innerText = e.target.value;
+        });
+        document.getElementById('fusionMinSlider').addEventListener('input', (e) => {
+            fusionMinDt = parseFloat(e.target.value) / 100;
+            document.getElementById('fusionMinValue').innerText = e.target.value;
+        });
+        document.getElementById('fusionRecoverySlider').addEventListener('input', (e) => {
+            fusionRecoveryRate = parseFloat(e.target.value) / 1000;
+            document.getElementById('fusionRecoveryValue').innerText = e.target.value;
+        });
+
         let deuAngle = 0; let triAngle = 0;
         
         document.getElementById('deuAngleSlider').addEventListener('input', (e) => {
@@ -388,6 +435,7 @@
         function resetEngineEnvironment() {
             nucleons = []; photons = [];
             deuteriumAssembled = false; tritiumAssembled = false; reactionTriggered = false;
+            fusionOccurred = false; fusionSlowFactor = 1.0;
             document.getElementById('btnLaunch').disabled = true;
         }
         
@@ -408,16 +456,18 @@
                 }
             }
 
-            const SLOWDOWN_START = 200;
             const SLOWDOWN_END = 30;
-            const MIN_DT_FACTOR = 0.05;
             let adaptiveFactor = 1.0;
-            if (reactionTriggered && minDist < SLOWDOWN_START) {
-                let t = Math.max(0, (minDist - SLOWDOWN_END) / (SLOWDOWN_START - SLOWDOWN_END));
-                adaptiveFactor = MIN_DT_FACTOR + (1.0 - MIN_DT_FACTOR) * (t * t);
+            if (reactionTriggered && minDist < approachRange) {
+                let t = Math.max(0, (minDist - SLOWDOWN_END) / (approachRange - SLOWDOWN_END));
+                adaptiveFactor = approachMinDt + (1.0 - approachMinDt) * (t * t);
             }
 
-            let dt = timeScale * adaptiveFactor;
+            if (fusionOccurred) {
+                fusionSlowFactor = Math.min(fusionSlowFactor + fusionRecoveryRate, 1.0);
+            }
+
+            let dt = timeScale * adaptiveFactor * fusionSlowFactor;
         
             nucleons.forEach(n => {
                 n.x += n.vx * dt + 0.5 * n.ax * dt * dt;
@@ -542,6 +592,9 @@
         });
 
         // Trigger the visual photon explosion ring
+        fusionOccurred = true;
+        fusionSlowFactor = fusionMinDt;
+
         for (let i = 0; i < 16; i++) {
             photons.push(new Photon(avgX, avgY, (i / 16) * Math.PI * 2));
         }
