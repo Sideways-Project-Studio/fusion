@@ -192,7 +192,7 @@
             <span>Gamma Photon</span>
         </div>
         <div class="legend-item">
-            <div class="legend-swatch" style="background:#e11d48;"></div>
+            <div class="legend-swatch" style="background:#facc15;"></div>
             <span>Alpha (&#8308;He)</span>
         </div>
     </div>
@@ -249,11 +249,11 @@
         
                 ctx.beginPath();
                 ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-                if (this.isAlphaComponent) this.color = '#e11d48';
+                if (this.isAlphaComponent) this.color = '#facc15';
                 ctx.fillStyle = this.color;
                 ctx.fill();
         
-                ctx.fillStyle = '#ffffff';
+                ctx.fillStyle = this.isAlphaComponent ? '#1a1a1a' : '#ffffff';
                 ctx.font = 'bold 9px sans-serif';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
@@ -395,7 +395,29 @@
             ctx.fillStyle = 'rgba(2, 6, 23, 0.4)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         
-            let dt = timeScale;
+            let minDist = Infinity;
+            if (reactionTriggered && nucleons.length >= 2) {
+                for (let i = 0; i < nucleons.length; i++) {
+                    for (let j = i + 1; j < nucleons.length; j++) {
+                        if (nucleons[i].clusterType === nucleons[j].clusterType) continue;
+                        let dx = nucleons[i].x - nucleons[j].x;
+                        let dy = nucleons[i].y - nucleons[j].y;
+                        let d = Math.sqrt(dx * dx + dy * dy);
+                        if (d < minDist) minDist = d;
+                    }
+                }
+            }
+
+            const SLOWDOWN_START = 200;
+            const SLOWDOWN_END = 30;
+            const MIN_DT_FACTOR = 0.05;
+            let adaptiveFactor = 1.0;
+            if (reactionTriggered && minDist < SLOWDOWN_START) {
+                let t = Math.max(0, (minDist - SLOWDOWN_END) / (SLOWDOWN_START - SLOWDOWN_END));
+                adaptiveFactor = MIN_DT_FACTOR + (1.0 - MIN_DT_FACTOR) * (t * t);
+            }
+
+            let dt = timeScale * adaptiveFactor;
         
             nucleons.forEach(n => {
                 n.x += n.vx * dt + 0.5 * n.ax * dt * dt;
@@ -438,7 +460,20 @@
             nucleons.forEach(n => n.draw(ctx));
             photons = photons.filter(p => p.life > 0);
             photons.forEach(p => { p.update(); p.draw(ctx); });
-        
+
+            ctx.save();
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
+            ctx.fillRect(8, 8, 195, 58);
+            ctx.strokeStyle = '#334155';
+            ctx.strokeRect(8, 8, 195, 58);
+            ctx.font = '12px monospace';
+            ctx.fillStyle = '#94a3b8';
+            ctx.textAlign = 'left';
+            ctx.fillText(`dt (effective): ${dt.toFixed(4)}`, 16, 26);
+            ctx.fillText(`adaptive factor: ${adaptiveFactor.toFixed(4)}`, 16, 42);
+            ctx.fillText(`min distance: ${minDist === Infinity ? '---' : minDist.toFixed(1) + ' px'}`, 16, 58);
+            ctx.restore();
+
             requestAnimationFrame(mainSimulationEngine);
         }
         
@@ -478,35 +513,40 @@
         }
         
         function evaluateFusionState() {
-            if (nucleons.length !== 5) return;
-        
-            let avgX = nucleons.reduce((s, n) => s + n.x, 0) / 5;
-            let avgY = nucleons.reduce((s, n) => s + n.y, 0) / 5;
-            let maxSpread = Math.max(...nucleons.map(n => Math.sqrt((n.x - avgX)**2 + (n.y - avgY)**2)));
-        
-            if (maxSpread < 32 && !nucleons.some(n => n.isAlphaComponent)) {
-                let neutrons = nucleons.filter(n => n.type === 'neutron');
-                neutrons.sort((a,b) => ((b.x-avgX)**2 + (b.y-avgY)**2) - ((a.x-avgX)**2 + (a.y-avgY)**2));
-                let escapeNeutron = neutrons[0];
-        
-                nucleons.forEach(n => {
-                    let angle = Math.atan2(n.y - avgY, n.x - avgX);
-                    if (n === escapeNeutron) {
-                        n.isEjectedNeutron = true;
-                        n.vx = Math.cos(angle) * 15.0;
-                        n.vy = Math.sin(angle) * 15.0;
-                    } else {
-                        n.isAlphaComponent = true;
-                        n.vx = -Math.cos(angle) * 3.0 + (n.x < avgX ? -1.5 : 1.5);
-                        n.vy = Math.sin(angle) * 1.5;
-                    }
-                });
-        
-                for (let i = 0; i < 16; i++) {
-                    photons.push(new Photon(avgX, avgY, (i / 16) * Math.PI * 2));
-                }
+    if (nucleons.length !== 5) return;
+
+    let avgX = nucleons.reduce((s, n) => s + n.x, 0) / 5;
+    let avgY = nucleons.reduce((s, n) => s + n.y, 0) / 5;
+    
+    // Increased detection spread from 32 to 55 to capture high-speed frames
+    let maxSpread = Math.max(...nucleons.map(n => Math.sqrt((n.x - avgX)**2 + (n.y - avgY)**2)));
+
+    if (maxSpread < 55 && !nucleons.some(n => n.isAlphaComponent)) {
+        let neutrons = nucleons.filter(n => n.type === 'neutron');
+        neutrons.sort((a,b) => ((b.x-avgX)**2 + (b.y-avgY)**2) - ((a.x-avgX)**2 + (a.y-avgY)**2));
+        let escapeNeutron = neutrons[0];
+
+        nucleons.forEach(n => {
+            let angle = Math.atan2(n.y - avgY, n.x - avgX);
+            if (n === escapeNeutron) {
+                n.isEjectedNeutron = true;
+                // High velocity neutron escape
+                n.vx = Math.cos(angle) * 15.0;
+                n.vy = Math.sin(angle) * 15.0;
+            } else {
+                n.isAlphaComponent = true;
+                // Form the Helium core
+                n.vx = -Math.cos(angle) * 2.0 + (n.x < avgX ? -1.0 : 1.0);
+                n.vy = Math.sin(angle) * 1.0;
             }
+        });
+
+        // Trigger the visual photon explosion ring
+        for (let i = 0; i < 16; i++) {
+            photons.push(new Photon(avgX, avgY, (i / 16) * Math.PI * 2));
         }
+    }
+}
         
         mainSimulationEngine();
         </script>
