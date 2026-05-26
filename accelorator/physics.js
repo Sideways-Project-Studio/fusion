@@ -1,6 +1,7 @@
 const FusionPhysics = (() => {
 
     const COULOMB_CONSTANT = 1000;
+    const MAX_SPEED = 25;
 
     class Nucleon {
         constructor(type, x, y, clusterType) {
@@ -102,16 +103,20 @@ const FusionPhysics = (() => {
         }
     }
 
-    function rotateCluster(clusterType, cx, cy, rad, nucleons) {
+    function rotateCluster(clusterType, cx, cy, rad, nucleons, sim) {
+        if (sim && sim.reactionTriggered) return;
+
         let filtered = nucleons.filter(n => n.clusterType === clusterType);
+        
         if (clusterType === 'D' && filtered.length === 2) {
-            let r0 = 16.0;
+            let r0 = 12.0; 
             filtered[0].x = cx - Math.cos(rad) * r0;
             filtered[0].y = cy - Math.sin(rad) * r0;
             filtered[1].x = cx + Math.cos(rad) * r0;
             filtered[1].y = cy + Math.sin(rad) * r0;
         } else if (clusterType === 'T' && filtered.length === 3) {
-            let r_equil = 28.5, h = r_equil * (Math.sqrt(3) / 2);
+            let r_equil = 24.0;
+            let h = r_equil * (Math.sqrt(3) / 2);
             let points = [
                 { x: 0, y: -(2 / 3) * h },
                 { x: -r_equil / 2, y: (1 / 3) * h },
@@ -121,50 +126,39 @@ const FusionPhysics = (() => {
                 let pt = points[idx];
                 n.x = cx + (pt.x * Math.cos(rad) - pt.y * Math.sin(rad));
                 n.y = cy + (pt.x * Math.sin(rad) + pt.y * Math.cos(rad));
-                n.vx = 0; n.vy = 0; n.ax = 0; n.ay = 0;
             });
         }
+        
+        filtered.forEach(n => {
+            n.vx = 0; n.vy = 0; n.ax = 0; n.ay = 0; n.old_ax = 0; n.old_ay = 0;
+        });
     }
 
-    function computeInterNucleonForces(n1, n2, dt) {
+    // Now ONLY computes long-range field effects (Coulomb barrier & initial attraction)
+    function computeInterNucleonForces(n1, n2) {
+        if (n1.clusterType === n2.clusterType && n1.clusterType !== 'Alpha') return;
+
         let dx = n2.x - n1.x;
         let dy = n2.y - n1.y;
         let r = Math.sqrt(dx * dx + dy * dy);
         if (r < 0.1) return;
 
+        // 1. Long-range Coulomb Repulsion
         let f_coulomb = (COULOMB_CONSTANT * n1.charge * n2.charge) / (r * r);
 
+        // 2. Long-range Strong Force Attraction
         const MU = 0.15;
-        let C_ATTRACT = 850;
-
-        if (n1.isAlphaComponent && n2.isAlphaComponent) {
-            C_ATTRACT = 3500;
-        }
+        let C_ATTRACT = 1200; 
+        if (r < 24.0) C_ATTRACT = 3500; 
 
         let expTerm = Math.exp(-MU * r);
         let f_strong_attract = C_ATTRACT * (expTerm / r) * (MU + (1 / r));
 
-        const QUANTUM_RADIUS = 15.0;
-        const STEEPNESS_FACTOR = 0.8;
-        const C_PAULI = 140000;
-        let f_pauli_exclusion = C_PAULI / (1.0 + Math.exp((r - QUANTUM_RADIUS) / STEEPNESS_FACTOR));
-
-        let f_net = f_coulomb + f_pauli_exclusion - f_strong_attract;
-
-        const FORCE_LIMIT = 2000;
-        if (f_net > FORCE_LIMIT) f_net = FORCE_LIMIT;
-        if (f_net < -FORCE_LIMIT) f_net = -FORCE_LIMIT;
+        // Combined Net macro-force (No Pauli exclusion formula needed anymore!)
+        let f_net = f_coulomb - f_strong_attract;
 
         let fx = (dx / r) * f_net;
         let fy = (dy / r) * f_net;
-
-        if (n1.isAlphaComponent && n2.isAlphaComponent) {
-            let rvx = n2.vx - n1.vx;
-            let rvy = n2.vy - n1.vy;
-            const WELL_VISCOSITY = 2.50;
-            fx += rvx * WELL_VISCOSITY / (dt || 1);
-            fy += rvy * WELL_VISCOSITY / (dt || 1);
-        }
 
         n1.ax -= fx / n1.mass;
         n1.ay -= fy / n1.mass;
@@ -172,8 +166,56 @@ const FusionPhysics = (() => {
         n2.ay += fy / n2.mass;
     }
 
+    // THE UNIFIED ENGINE CONSTRAINTS: Resolves structural shapes AND overlapping entirely via geometry
+    function applyUnifiedConstraints(nucleons) {
+        // Run solver passes (More passes = crisper, stiffer physical boundaries)
+        const SOLVER_PASSES = 5; 
+
+        for (let pass = 0; pass < SOLVER_PASSES; pass++) {
+            for (let i = 0; i < nucleons.length; i++) {
+                for (let j = i + 1; j < nucleons.length; j++) {
+                    let n1 = nucleons[i];
+                    let n2 = nucleons[j];
+
+                    let dx = n2.x - n1.x;
+                    let dy = n2.y - n1.y;
+                    let dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
+
+                    // Condition A: They belong to the same un-fused parent ion configuration
+                    if (n1.clusterType === n2.clusterType && n1.clusterType !== 'Alpha' && n1.clusterType !== 'Free') {
+                        let targetDist = (n1.clusterType === 'D') ? 24.0 : 23.5;
+                        let difference = targetDist - dist;
+                        let percent = (difference / dist) * 0.5;
+                        
+                        n1.x -= dx * percent; n1.y -= dy * percent;
+                        n2.x += dx * percent; n2.y += dy * percent;
+                    } 
+                    
+                    // Condition B: General Solid Boundary Overlapping (Replaces Pauli Exclusion Core)
+                    else {
+                        let minDist = n1.radius + n2.radius; // 24px hard boundary
+                        if (dist < minDist) {
+                            let difference = minDist - dist;
+                            // Push apart symmetrically based on geometric collision depth
+                            let percent = (difference / dist) * 0.5;
+
+                            n1.x -= dx * percent; n1.y -= dy * percent;
+                            n2.x += dx * percent; n2.y += dy * percent;
+                            
+                            // Friction Damping on contact velocities to keep things smooth
+                            let rvx = n2.vx - n1.vx;
+                            let rvy = n2.vy - n1.vy;
+                            n1.vx += rvx * 0.05; n1.vy += rvy * 0.05;
+                            n2.vx -= rvx * 0.05; n2.vy -= rvy * 0.05;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     function evaluateFusionState(sim) {
-        if (sim.nucleons.length !== 5) return;
+        if (sim.nucleons.length !== 5 || sim.fusionOccurred) return;
 
         let avgX = sim.nucleons.reduce((s, n) => s + n.x, 0) / 5;
         let avgY = sim.nucleons.reduce((s, n) => s + n.y, 0) / 5;
@@ -182,7 +224,8 @@ const FusionPhysics = (() => {
             Math.sqrt((n.x - avgX) ** 2 + (n.y - avgY) ** 2)
         ));
 
-        if (maxSpread < 55 && !sim.nucleons.some(n => n.isAlphaComponent)) {
+        // Fusion triggers naturally if macro forces pulled them within capture radius
+        if (maxSpread < 42) {
             let neutrons = sim.nucleons.filter(n => n.type === 'neutron');
             neutrons.sort((a, b) =>
                 ((b.x - avgX) ** 2 + (b.y - avgY) ** 2) -
@@ -190,31 +233,16 @@ const FusionPhysics = (() => {
             );
             let escapeNeutron = neutrons[0];
 
-            let alphaPositions = [
-                { dx: -11, dy: -11 },
-                { dx: 11, dy: 11 },
-                { dx: -11, dy: 11 },
-                { dx: 11, dy: -11 }
-            ];
-            let alphaIdx = 0;
-
             sim.nucleons.forEach(n => {
-                let angle = Math.atan2(n.y - avgY, n.x - avgX);
                 if (n === escapeNeutron) {
+                    let angle = Math.atan2(n.y - avgY, n.x - avgX);
                     n.isEjectedNeutron = true;
                     n.vx = Math.cos(angle) * 16.0;
                     n.vy = Math.sin(angle) * 16.0;
+                    n.clusterType = 'Free';
                 } else {
                     n.isAlphaComponent = true;
                     n.clusterType = 'Alpha';
-
-                    let pos = alphaPositions[alphaIdx++];
-                    n.x = avgX + pos.dx;
-                    n.y = avgY + pos.dy;
-
-                    n.vx = 0; n.vy = 0;
-                    n.ax = 0; n.ay = 0;
-                    n.old_ax = 0; n.old_ay = 0;
                 }
             });
 
@@ -254,10 +282,6 @@ const FusionPhysics = (() => {
         return adaptiveFactor;
     }
 
-    /**
-     * Runs one full physics tick. Returns { dt, adaptiveFactor, minDist }
-     * for use by the HUD overlay.
-     */
     function step(sim, canvasWidth, canvasHeight) {
         let minDist = Infinity;
         if (sim.reactionTriggered && sim.nucleons.length >= 2) {
@@ -275,6 +299,14 @@ const FusionPhysics = (() => {
 
         let dt = sim.timeScale * adaptiveFactor * sim.fusionSlowFactor;
 
+        // 1. Force Step Execution
+        for (let i = 0; i < sim.nucleons.length; i++) {
+            for (let j = i + 1; j < sim.nucleons.length; j++) {
+                computeInterNucleonForces(sim.nucleons[i], sim.nucleons[j]);
+            }
+        }
+
+        // 2. Position Integration Projection
         sim.nucleons.forEach(n => {
             n.x += n.vx * dt + 0.5 * n.ax * dt * dt;
             n.y += n.vy * dt + 0.5 * n.ay * dt * dt;
@@ -284,12 +316,10 @@ const FusionPhysics = (() => {
             n.ay = 0;
         });
 
-        for (let i = 0; i < sim.nucleons.length; i++) {
-            for (let j = i + 1; j < sim.nucleons.length; j++) {
-                computeInterNucleonForces(sim.nucleons[i], sim.nucleons[j], dt);
-            }
-        }
+        // 3. Apply Unified Constraints (Instantly repairs any integration errors or overlaps)
+        applyUnifiedConstraints(sim.nucleons);
 
+        // 4. Update Velocities out from integrated constraint points
         sim.nucleons.forEach(n => {
             if (!sim.reactionTriggered) {
                 let speedSq = n.vx * n.vx + n.vy * n.vy;
@@ -299,8 +329,16 @@ const FusionPhysics = (() => {
                     n.vx *= 0.82; n.vy *= 0.82;
                 }
             }
+            
             n.vx += 0.5 * (n.old_ax + n.ax) * dt;
             n.vy += 0.5 * (n.old_ay + n.ay) * dt;
+
+            let speed = Math.sqrt(n.vx * n.vx + n.vy * n.vy);
+            if (speed > MAX_SPEED) {
+                let scale = MAX_SPEED / speed;
+                n.vx *= scale;
+                n.vy *= scale;
+            }
 
             let pad = n.radius;
             if (n.x < pad) { n.x = pad; n.vx *= -0.5; }

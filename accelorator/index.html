@@ -110,6 +110,32 @@
         .slider-group input[type="range"] {
             width: 120px;
         }
+        #playbackControls {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .pb-btn {
+            width: 34px;
+            height: 34px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            font-size: 16px;
+            border-radius: 6px;
+        }
+        .pb-btn.active-pause {
+            background-color: #b45309;
+            border-color: #f59e0b;
+        }
+        #stepIndicator {
+            font-size: 11px;
+            color: #64748b;
+            font-family: monospace;
+            min-width: 70px;
+            text-align: center;
+        }
         #speedControls {
             display: flex;
             align-items: center;
@@ -205,6 +231,12 @@
             <div class="slider-group">
                 <label for="timeSlider">Speed: <span id="timeValue">1.0</span>x</label>
                 <input type="range" id="timeSlider" min="0.1" max="4.0" value="1.0" step="0.1">
+            </div>
+            <div id="playbackControls">
+                <button class="pb-btn" id="btnStepBack" title="Step back [←]">⏮</button>
+                <button class="pb-btn" id="btnPause" title="Pause / Play [Space]">⏸</button>
+                <button class="pb-btn" id="btnStepFwd" title="Step forward [→]">⏭</button>
+                <span id="stepIndicator"></span>
             </div>
             <div id="speedControls">
                 <button class="speed-btn" data-speed="0.25">0.25x</button>
@@ -311,8 +343,139 @@
             fusionRecoveryRate: 0.002,
             impactOffset: 0.2,
             deuAngle: 0,
-            triAngle: 0
+            triAngle: 0,
+            paused: false
         };
+
+        const MAX_HISTORY = 2000;
+        let stateHistory = [];
+        let historyIndex = -1;
+
+        function snapshotState() {
+            return {
+                nucleons: sim.nucleons.map(n => ({
+                    type: n.type, x: n.x, y: n.y,
+                    vx: n.vx, vy: n.vy, ax: n.ax, ay: n.ay,
+                    old_ax: n.old_ax, old_ay: n.old_ay,
+                    mass: n.mass, charge: n.charge, radius: n.radius,
+                    color: n.color, isAlphaComponent: n.isAlphaComponent,
+                    isEjectedNeutron: n.isEjectedNeutron, clusterType: n.clusterType
+                })),
+                photons: sim.photons.map(p => ({
+                    x: p.x, y: p.y, vx: p.vx, vy: p.vy,
+                    speed: p.speed, life: p.life, decay: p.decay
+                })),
+                fusionOccurred: sim.fusionOccurred,
+                fusionSlowFactor: sim.fusionSlowFactor,
+                reactionTriggered: sim.reactionTriggered
+            };
+        }
+
+        function restoreSnapshot(snap) {
+            sim.nucleons = snap.nucleons.map(s => {
+                let n = new Nucleon(s.type, s.x, s.y, s.clusterType);
+                n.vx = s.vx; n.vy = s.vy; n.ax = s.ax; n.ay = s.ay;
+                n.old_ax = s.old_ax; n.old_ay = s.old_ay;
+                n.mass = s.mass; n.charge = s.charge; n.radius = s.radius;
+                n.color = s.color; n.isAlphaComponent = s.isAlphaComponent;
+                n.isEjectedNeutron = s.isEjectedNeutron;
+                return n;
+            });
+            sim.photons = snap.photons.map(s => {
+                let p = new Photon(0, 0, 0);
+                p.x = s.x; p.y = s.y; p.vx = s.vx; p.vy = s.vy;
+                p.speed = s.speed; p.life = s.life; p.decay = s.decay;
+                return p;
+            });
+            sim.fusionOccurred = snap.fusionOccurred;
+            sim.fusionSlowFactor = snap.fusionSlowFactor;
+            sim.reactionTriggered = snap.reactionTriggered;
+        }
+
+        function pushHistory() {
+            if (historyIndex < stateHistory.length - 1) {
+                stateHistory.length = historyIndex + 1;
+            }
+            stateHistory.push(snapshotState());
+            if (stateHistory.length > MAX_HISTORY) stateHistory.shift();
+            historyIndex = stateHistory.length - 1;
+            updateStepIndicator();
+        }
+
+        function stepBack() {
+            if (historyIndex <= 0) return;
+            historyIndex--;
+            restoreSnapshot(stateHistory[historyIndex]);
+            redrawCanvas();
+            updateStepIndicator();
+        }
+
+        function stepForward() {
+            if (historyIndex < stateHistory.length - 1) {
+                historyIndex++;
+                restoreSnapshot(stateHistory[historyIndex]);
+                redrawCanvas();
+            } else {
+                doOneStep();
+            }
+            updateStepIndicator();
+        }
+
+        function doOneStep() {
+            physicsStep(sim, canvas.width, canvas.height);
+            sim.photons = sim.photons.filter(p => p.life > 0);
+            sim.photons.forEach(p => p.update(sim.timeScale));
+            pushHistory();
+        }
+
+        function redrawCanvas() {
+            ctx.fillStyle = '#020617';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            sim.nucleons.forEach(n => n.draw(ctx));
+            sim.photons.forEach(p => p.draw(ctx));
+            drawHUD();
+        }
+
+        function drawHUD() {
+            ctx.save();
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
+            ctx.fillRect(8, 8, 195, 58);
+            ctx.strokeStyle = '#334155';
+            ctx.strokeRect(8, 8, 195, 58);
+            ctx.font = '12px monospace';
+            ctx.fillStyle = '#94a3b8';
+            ctx.textAlign = 'left';
+            ctx.fillText(`step: ${historyIndex} / ${stateHistory.length - 1}`, 16, 26);
+            ctx.fillText(`particles: ${sim.nucleons.length}`, 16, 42);
+            ctx.fillText(`state: ${sim.paused ? 'PAUSED' : 'RUNNING'}`, 16, 58);
+            ctx.restore();
+
+            if (sim.paused) {
+                ctx.save();
+                ctx.fillStyle = 'rgba(180, 83, 9, 0.75)';
+                ctx.font = 'bold 14px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('⏸ PAUSED — use ← → to step', canvas.width / 2, canvas.height - 16);
+                ctx.restore();
+            }
+        }
+
+        function togglePause() {
+            sim.paused = !sim.paused;
+            const btn = document.getElementById('btnPause');
+            btn.textContent = sim.paused ? '▶' : '⏸';
+            btn.classList.toggle('active-pause', sim.paused);
+            if (!sim.paused && historyIndex < stateHistory.length - 1) {
+                stateHistory.length = historyIndex + 1;
+            }
+            updateStepIndicator();
+        }
+
+        function updateStepIndicator() {
+            const el = document.getElementById('stepIndicator');
+            if (stateHistory.length === 0) { el.textContent = ''; return; }
+            el.textContent = `${historyIndex} / ${stateHistory.length - 1}`;
+        }
 
         // --- Controls ---
 
@@ -332,6 +495,23 @@
         document.getElementById('timeSlider').addEventListener('input', (e) => setTimeScale(parseFloat(e.target.value)));
         document.querySelectorAll('.speed-btn').forEach(b => b.addEventListener('click', () => setTimeScale(parseFloat(b.dataset.speed))));
         document.getElementById('btnReset').addEventListener('click', resetEngineEnvironment);
+
+        document.getElementById('btnPause').addEventListener('click', togglePause);
+        document.getElementById('btnStepBack').addEventListener('click', () => {
+            if (!sim.paused) togglePause();
+            stepBack();
+        });
+        document.getElementById('btnStepFwd').addEventListener('click', () => {
+            if (!sim.paused) togglePause();
+            stepForward();
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT') return;
+            if (e.code === 'Space') { e.preventDefault(); togglePause(); }
+            if (e.code === 'ArrowLeft')  { e.preventDefault(); if (!sim.paused) togglePause(); stepBack(); }
+            if (e.code === 'ArrowRight') { e.preventDefault(); if (!sim.paused) togglePause(); stepForward(); }
+        });
 
         document.getElementById('approachMinSlider').addEventListener('input', (e) => {
             sim.approachMinDt = parseFloat(e.target.value) / 100;
@@ -421,7 +601,13 @@
             sim.reactionTriggered = false;
             sim.fusionOccurred = false;
             sim.fusionSlowFactor = 1.0;
+            sim.paused = false;
             document.getElementById('btnLaunch').disabled = true;
+            document.getElementById('btnPause').textContent = '⏸';
+            document.getElementById('btnPause').classList.remove('active-pause');
+            stateHistory = [];
+            historyIndex = -1;
+            updateStepIndicator();
             energyHistory = [];
             document.getElementById('graphLegend').innerHTML = '';
         }
@@ -429,28 +615,24 @@
         // --- Main Render Loop ---
 
         function mainSimulationEngine() {
+            if (sim.paused) {
+                requestAnimationFrame(mainSimulationEngine);
+                return;
+            }
+
             ctx.fillStyle = 'rgba(2, 6, 23, 0.4)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            const { dt, adaptiveFactor, minDist } = physicsStep(sim, canvas.width, canvas.height);
+            if (sim.nucleons.length > 0) pushHistory();
+
+            physicsStep(sim, canvas.width, canvas.height);
 
             sim.nucleons.forEach(n => n.draw(ctx));
 
             sim.photons = sim.photons.filter(p => p.life > 0);
             sim.photons.forEach(p => { p.update(sim.timeScale); p.draw(ctx); });
 
-            ctx.save();
-            ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
-            ctx.fillRect(8, 8, 195, 58);
-            ctx.strokeStyle = '#334155';
-            ctx.strokeRect(8, 8, 195, 58);
-            ctx.font = '12px monospace';
-            ctx.fillStyle = '#94a3b8';
-            ctx.textAlign = 'left';
-            ctx.fillText(`dt (effective): ${dt.toFixed(4)}`, 16, 26);
-            ctx.fillText(`adaptive factor: ${adaptiveFactor.toFixed(4)}`, 16, 42);
-            ctx.fillText(`min distance: ${minDist === Infinity ? '---' : minDist.toFixed(1) + ' px'}`, 16, 58);
-            ctx.restore();
+            drawHUD();
 
             requestAnimationFrame(mainSimulationEngine);
         }
@@ -618,7 +800,7 @@
         }
 
         function energyGraphLoop() {
-            sampleEnergies();
+            if (!sim.paused) sampleEnergies();
             drawEnergyGraph();
             requestAnimationFrame(energyGraphLoop);
         }
