@@ -110,6 +110,40 @@
         .slider-group input[type="range"] {
             width: 120px;
         }
+        .slowdown-section {
+            gap: 16px !important;
+        }
+        .slowdown-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            background: rgba(30, 41, 59, 0.5);
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 8px 12px 10px;
+        }
+        .slowdown-phase-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: #cbd5e1;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 2px;
+        }
+        .phase-icon {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .slider-val {
+            color: #e2e8f0;
+            font-weight: 600;
+        }
+        .slider-group[title] {
+            cursor: help;
+        }
         #playbackControls {
             display: flex;
             align-items: center;
@@ -261,26 +295,37 @@
             </div>
         </div>
         <div class="control-row" style="border-top:1px solid #334155; padding-top:8px; margin-top:2px;">
-            <span style="font-size:12px; color:#94a3b8; font-weight:600; letter-spacing:0.5px;">SLOWDOWN OVERRIDES</span>
+            <span style="font-size:12px; color:#94a3b8; font-weight:600; letter-spacing:0.5px;">SLOW-MOTION REPLAY</span>
+            <span style="font-size:11px; color:#64748b; margin-left:6px;">The sim auto-slows at key moments so you can watch the physics</span>
         </div>
-        <div class="control-row">
-            <div class="slider-group">
-                <label for="approachMinSlider">Approach Min: <span id="approachMinValue">0.5</span>%</label>
-                <input type="range" id="approachMinSlider" min="0.1" max="10" value="0.5" step="0.1">
+        <div class="control-row slowdown-section">
+            <div class="slowdown-group">
+                <div class="slowdown-phase-label">
+                    <span class="phase-icon" style="background:#3b82f6;"></span>
+                    During Approach
+                </div>
+                <div class="slider-group" title="How close the ions need to be before slow-motion kicks in. Larger = starts slowing earlier.">
+                    <label for="approachRangeSlider">Slow when within: <span id="approachRangeValue" class="slider-val">200</span>px</label>
+                    <input type="range" id="approachRangeSlider" min="50" max="500" value="200" step="10">
+                </div>
+                <div class="slider-group" title="The slowest the simulation will go as ions get very close. Lower = more slow-mo detail.">
+                    <label for="approachMinSlider">Slowest speed: <span id="approachMinValue" class="slider-val">0.5</span>%</label>
+                    <input type="range" id="approachMinSlider" min="0.1" max="10" value="0.5" step="0.1">
+                </div>
             </div>
-            <div class="slider-group">
-                <label for="approachRangeSlider">Approach Range: <span id="approachRangeValue">200</span>px</label>
-                <input type="range" id="approachRangeSlider" min="50" max="500" value="200" step="10">
-            </div>
-        </div>
-        <div class="control-row">
-            <div class="slider-group">
-                <label for="fusionMinSlider">Fusion Min: <span id="fusionMinValue">3</span>%</label>
-                <input type="range" id="fusionMinSlider" min="1" max="100" value="3" step="1">
-            </div>
-            <div class="slider-group">
-                <label for="fusionRecoverySlider">Fusion Recovery: <span id="fusionRecoveryValue">2</span></label>
-                <input type="range" id="fusionRecoverySlider" min="1" max="50" value="2" step="1">
+            <div class="slowdown-group">
+                <div class="slowdown-phase-label">
+                    <span class="phase-icon" style="background:#22c55e;"></span>
+                    At Fusion
+                </div>
+                <div class="slider-group" title="How slow the sim goes at the exact moment of fusion. Lower = longer slow-mo of the fusion event.">
+                    <label for="fusionMinSlider">Slowest speed: <span id="fusionMinValue" class="slider-val">3</span>%</label>
+                    <input type="range" id="fusionMinSlider" min="1" max="100" value="3" step="1">
+                </div>
+                <div class="slider-group" title="How quickly speed returns to normal after fusion. Higher = snaps back to real-time faster.">
+                    <label for="fusionRecoverySlider">Resume speed: <span id="fusionRecoveryValue" class="slider-val">2</span></label>
+                    <input type="range" id="fusionRecoverySlider" min="1" max="50" value="2" step="1">
+                </div>
             </div>
         </div>
     </div>
@@ -422,7 +467,7 @@
         }
 
         function doOneStep() {
-            physicsStep(sim, canvas.width, canvas.height);
+            lastStepInfo = physicsStep(sim, canvas.width, canvas.height);
             sim.photons = sim.photons.filter(p => p.life > 0);
             sim.photons.forEach(p => p.update(sim.timeScale));
             pushHistory();
@@ -436,18 +481,41 @@
             drawHUD();
         }
 
+        let lastStepInfo = { dt: 1, adaptiveFactor: 1, minDist: Infinity };
+
         function drawHUD() {
             ctx.save();
+            let hudH = sim.reactionTriggered ? 74 : 58;
             ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
-            ctx.fillRect(8, 8, 195, 58);
+            ctx.fillRect(8, 8, 195, hudH);
             ctx.strokeStyle = '#334155';
-            ctx.strokeRect(8, 8, 195, 58);
+            ctx.strokeRect(8, 8, 195, hudH);
             ctx.font = '12px monospace';
             ctx.fillStyle = '#94a3b8';
             ctx.textAlign = 'left';
             ctx.fillText(`step: ${historyIndex} / ${stateHistory.length - 1}`, 16, 26);
             ctx.fillText(`particles: ${sim.nucleons.length}`, 16, 42);
             ctx.fillText(`state: ${sim.paused ? 'PAUSED' : 'RUNNING'}`, 16, 58);
+
+            if (sim.reactionTriggered) {
+                let pct = (lastStepInfo.adaptiveFactor * sim.fusionSlowFactor * 100);
+                let barW = 130;
+                let barX = 16;
+                let barY = 66;
+
+                ctx.fillStyle = '#1e293b';
+                ctx.fillRect(barX, barY, barW, 8);
+
+                let fillW = (pct / 100) * barW;
+                let barColor = pct < 10 ? '#ef4444' : pct < 50 ? '#f59e0b' : '#22c55e';
+                ctx.fillStyle = barColor;
+                ctx.fillRect(barX, barY, fillW, 8);
+
+                ctx.fillStyle = '#94a3b8';
+                ctx.font = '10px monospace';
+                ctx.fillText(`speed: ${pct.toFixed(1)}%`, barX + barW + 6, barY + 8);
+            }
+
             ctx.restore();
 
             if (sim.paused) {
@@ -625,7 +693,7 @@
 
             if (sim.nucleons.length > 0) pushHistory();
 
-            physicsStep(sim, canvas.width, canvas.height);
+            lastStepInfo = physicsStep(sim, canvas.width, canvas.height);
 
             sim.nucleons.forEach(n => n.draw(ctx));
 
