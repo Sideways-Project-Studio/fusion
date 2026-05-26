@@ -193,350 +193,313 @@
         </div>
     </div>
 
-<script>
-const canvas = document.getElementById('physicsCanvas');
-const ctx = canvas.getContext('2d');
-
-let nucleons = [];
-let photons = [];
-
-let deuteriumAssembled = false;
-let tritiumAssembled = false;
-let reactionTriggered = false;
-let timeScale = 1.0;
-let currentKeV = 15;
-
-const KE = 1000;
-const KS_ATTRACT = 1400;
-const KS_REPEL = 800000;
-
-class Nucleon {
-    constructor(type, x, y, clusterType) {
-        this.type = type;
-        this.x = x;
-        this.y = y;
-        this.vx = 0;
-        this.vy = 0;
-        this.mass = 1.0;
-        this.charge = (type === 'proton') ? 1.0 : 0.0;
-        this.radius = 12;
-        this.color = (type === 'proton') ? '#ef4444' : '#3b82f6';
-        this.isAlphaComponent = false;
-        this.isEjectedNeutron = false;
-        this.clusterType = clusterType; 
-    }
-
-    draw(ctx) {
-    ctx.save();
-    
-    // --- 1. ACCURATE COULOMB FIELD VISUALIZATION ---
-    // The electrostatic field DOES radiate far out into space (1/r^2 law)
-    if (this.charge > 0) {
-        let coulombGrad = ctx.createRadialGradient(this.x, this.y, this.radius, this.x, this.y, 120);
-        coulombGrad.addColorStop(0, 'rgba(239, 68, 68, 0.15)');
-        coulombGrad.addColorStop(1, 'rgba(239, 68, 68, 0)');
-        ctx.beginPath(); ctx.arc(this.x, this.y, 120, 0, Math.PI * 2);
-        ctx.fillStyle = coulombGrad; ctx.fill();
-    }
-    
-    // --- 2. ACCURATE STRONG FORCE FIELD VISUALIZATION ---
-    // It is ultra-short range, tightly hugging the nucleon body (radius 18 instead of 35)
-    let strongGrad = ctx.createRadialGradient(this.x, this.y, this.radius, this.x, this.y, 18);
-    strongGrad.addColorStop(0, 'rgba(34, 197, 94, 0.4)'); // Brighter right at the edge
-    strongGrad.addColorStop(1, 'rgba(34, 197, 94, 0)');
-    ctx.beginPath(); ctx.arc(this.x, this.y, 18, 0, Math.PI * 2);
-    ctx.fillStyle = strongGrad; ctx.fill();
-    
-    ctx.restore();
-
-    // --- 3. DRAW NUCLEON CORE ---
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-    if (this.isAlphaComponent) this.color = '#e11d48';
-    ctx.fillStyle = this.color;
-    ctx.fill();
-
-    // Text Labels
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 9px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    let label = this.type === 'proton' ? 'P+' : 'N0';
-    if (this.isAlphaComponent) label = '\u03B1';
-    if (this.isEjectedNeutron) label = 'n\u2070';
-    ctx.fillText(label, this.x, this.y);
-}
-}
-
-class Photon {
-    constructor(x, y, angle) {
-        this.x = x; this.y = y; this.speed = 12;
-        this.vx = Math.cos(angle) * this.speed;
-        this.vy = Math.sin(angle) * this.speed;
-        this.life = 1.0; this.decay = 0.02;
-    }
-    update() {
-        this.x += this.vx * timeScale;
-        this.y += this.vy * timeScale;
-        this.life -= this.decay * timeScale;
-    }
-    draw(ctx) {
-        ctx.save(); ctx.globalAlpha = this.life;
-        ctx.strokeStyle = '#a855f7'; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.moveTo(this.x, this.y);
-        for (let i = 0; i < 6; i++) {
-            let evalX = this.x - (this.vx * i * 0.2);
-            let evalY = this.y - (this.vy * i * 0.2);
-            let waveOffset = Math.sin(Date.now() * 0.05 + i) * 4;
-            let mag = Math.sqrt((-this.vy)**2 + this.vx**2) || 1;
-            ctx.lineTo(evalX + (-this.vy / mag) * waveOffset, evalY + (this.vx / mag) * waveOffset);
-        }
-        ctx.stroke(); ctx.restore();
-    }
-}
-
-document.getElementById('kevSlider').addEventListener('input', (e) => {
-    currentKeV = parseFloat(e.target.value);
-    document.getElementById('kevValue').innerText = currentKeV;
-});
-
-const setTimeScale = (val) => {
-    timeScale = val; document.getElementById('timeSlider').value = val;
-    document.getElementById('timeValue').innerText = val.toFixed(1);
-    document.querySelectorAll('.speed-btn').forEach(b => b.classList.toggle('active', parseFloat(b.dataset.speed) === val));
-};
-document.getElementById('timeSlider').addEventListener('input', (e) => setTimeScale(parseFloat(e.target.value)));
-document.querySelectorAll('.speed-btn').forEach(b => b.addEventListener('click', () => setTimeScale(parseFloat(b.dataset.speed))));
-document.getElementById('btnReset').addEventListener('click', resetEngineEnvironment);
-
-let deuAngle = 0;
-let triAngle = 0;
-
-document.getElementById('deuAngleSlider').addEventListener('input', (e) => {
-    deuAngle = parseFloat(e.target.value) * Math.PI / 180;
-    document.getElementById('deuAngleValue').innerText = e.target.value;
-    if (deuteriumAssembled && !reactionTriggered) rotateCluster('D', 180, 275, deuAngle);
-});
-
-document.getElementById('triAngleSlider').addEventListener('input', (e) => {
-    triAngle = parseFloat(e.target.value) * Math.PI / 180;
-    document.getElementById('triAngleValue').innerText = e.target.value;
-    if (tritiumAssembled && !reactionTriggered) rotateCluster('T', 720, 275, triAngle);
-});
-
-document.getElementById('btnDeuterium').addEventListener('click', () => {
-    if (deuteriumAssembled) return;
-    let cx = 180, cy = 275;
-    let r0 = 6.25;
-    
-    let p = new Nucleon('proton', cx - r0, cy, 'D');
-    let n = new Nucleon('neutron', cx + r0, cy, 'D');
-    
-    nucleons.push(p, n);
-    deuteriumAssembled = true; 
-    
-    rotateCluster('D', cx, cy, deuAngle);
-    evalLaunchVerification();
-});
-
-document.getElementById('btnTritium').addEventListener('click', () => {
-    if (tritiumAssembled) return;
-    let cx = 720, cy = 275;
-    let r_equil = 13.0;
-    
-    let h = r_equil * (Math.sqrt(3) / 2);
-    
-    let p = new Nucleon('proton', cx, cy - (2/3)*h, 'T');
-    let n1 = new Nucleon('neutron', cx - r_equil/2, cy + (1/3)*h, 'T');
-    let n2 = new Nucleon('neutron', cx + r_equil/2, cy + (1/3)*h, 'T');
-    
-    nucleons.push(p, n1, n2);
-    tritiumAssembled = true; 
-    
-    rotateCluster('T', cx, cy, triAngle);
-    evalLaunchVerification();
-});
-
-function rotateCluster(clusterType, cx, cy, rad) {
-    let filtered = nucleons.filter(n => n.clusterType === clusterType);
-    if (clusterType === 'D' && filtered.length === 2) {
-        let r0 = 6.25;
-        filtered[0].x = cx - Math.cos(rad) * r0; filtered[0].y = cy - Math.sin(rad) * r0;
-        filtered[1].x = cx + Math.cos(rad) * r0; filtered[1].y = cy + Math.sin(rad) * r0;
-    } else if (clusterType === 'T' && filtered.length === 3) {
-        let r_equil = 13.0;
-        let h = r_equil * (Math.sqrt(3) / 2);
+    <script>
+        const canvas = document.getElementById('physicsCanvas');
+        const ctx = canvas.getContext('2d');
         
-        let points = [
-            {x: 0, y: -(2/3)*h},
-            {x: -r_equil/2, y: (1/3)*h},
-            {x: r_equil/2, y: (1/3)*h}
-        ];
+        let nucleons = [];
+        let photons = [];
         
-        filtered.forEach((n, idx) => {
-            let pt = points[idx];
-            n.x = cx + (pt.x * Math.cos(rad) - pt.y * Math.sin(rad));
-            n.y = cy + (pt.x * Math.sin(rad) + pt.y * Math.cos(rad));
-            n.vx = 0; n.vy = 0;
-        });
-    }
-}
-
-document.getElementById('btnLaunch').addEventListener('click', () => {
-    if (!deuteriumAssembled || !tritiumAssembled || reactionTriggered) return;
-    let speedFactor = 0.38;
-    let computedVelocity = Math.sqrt(currentKeV) * speedFactor;
-    nucleons.forEach(n => {
-        n.vx = (n.x < canvas.width / 2) ? computedVelocity : -computedVelocity;
-        n.vy = 0;
-    });
-    reactionTriggered = true;
-});
-
-function evalLaunchVerification() {
-    if (deuteriumAssembled && tritiumAssembled) document.getElementById('btnLaunch').disabled = false;
-}
-
-function resetEngineEnvironment() {
-    nucleons = []; photons = [];
-    deuteriumAssembled = false; tritiumAssembled = false; reactionTriggered = false;
-    document.getElementById('btnLaunch').disabled = true;
-}
-
-function mainSimulationEngine() {
-    ctx.fillStyle = 'rgba(2, 6, 23, 0.4)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    for (let i = 0; i < nucleons.length; i++) {
-        for (let j = i + 1; j < nucleons.length; j++) {
-            applyFundamentalLaws(nucleons[i], nucleons[j]);
-        }
-    }
-
-    for (let i = 0; i < nucleons.length; i++) {
-        for (let j = i + 1; j < nucleons.length; j++) {
-            let n1 = nucleons[i];
-            let n2 = nucleons[j];
-            
-            let dx = n2.x - n1.x;
-            let dy = n2.y - n1.y;
-            let dist = Math.sqrt(dx * dx + dy * dy);
-            let minDist = n1.radius + n2.radius;
-
-            if (dist < minDist) {
-                if (dist === 0) { 
-                    n2.x += Math.random() * 2 - 1; 
-                    n2.y += Math.random() * 2 - 1;
-                    continue;
+        let deuteriumAssembled = false;
+        let tritiumAssembled = false;
+        let reactionTriggered = false;
+        let timeScale = 1.0;
+        let currentKeV = 15;
+        
+        const KE = 1000;
+        
+        class Nucleon {
+            constructor(type, x, y, clusterType) {
+                this.type = type;
+                this.x = x;
+                this.y = y;
+                this.vx = 0;
+                this.vy = 0;
+                this.ax = 0; 
+                this.ay = 0; 
+                this.mass = 1.0; 
+                this.charge = (type === 'proton') ? 1.0 : 0.0;
+                this.radius = 12;
+                this.color = (type === 'proton') ? '#ef4444' : '#3b82f6';
+                this.isAlphaComponent = false;
+                this.isEjectedNeutron = false;
+                this.clusterType = clusterType; 
+            }
+        
+            draw(ctx) {
+                ctx.save();
+                if (this.charge > 0) {
+                    let coulombGrad = ctx.createRadialGradient(this.x, this.y, this.radius, this.x, this.y, 120);
+                    coulombGrad.addColorStop(0, 'rgba(239, 68, 68, 0.15)');
+                    coulombGrad.addColorStop(1, 'rgba(239, 68, 68, 0)');
+                    ctx.beginPath(); ctx.arc(this.x, this.y, 120, 0, Math.PI * 2);
+                    ctx.fillStyle = coulombGrad; ctx.fill();
                 }
                 
-                let overlap = minDist - dist;
-                let pushX = (dx / dist) * overlap * 0.5;
-                let pushY = (dy / dist) * overlap * 0.5;
-
-                n1.x -= pushX;
-                n1.y -= pushY;
-                n2.x += pushX;
-                n2.y += pushY;
-
-                let kx = n1.vx - n2.vx;
-                let ky = n1.vy - n2.vy;
-                n1.vx -= kx * 0.2; n1.vy -= ky * 0.2;
-                n2.vx += kx * 0.2; n2.vy += ky * 0.2;
-            }
-        }
-    }
-
-    nucleons.forEach(n => {
-        if (!reactionTriggered) {
-            n.vx *= 0.88;
-            n.vy *= 0.88;
-        }
-
-        n.x += n.vx * timeScale;
-        n.y += n.vy * timeScale;
+                let strongGrad = ctx.createRadialGradient(this.x, this.y, this.radius, this.x, this.y, 18);
+                strongGrad.addColorStop(0, 'rgba(34, 197, 94, 0.4)'); 
+                strongGrad.addColorStop(1, 'rgba(34, 197, 94, 0)');
+                ctx.beginPath(); ctx.arc(this.x, this.y, 18, 0, Math.PI * 2);
+                ctx.fillStyle = strongGrad; ctx.fill();
+                ctx.restore();
         
-        let pad = n.radius;
-        if (n.x < pad) { n.x = pad; n.vx *= -0.5; }
-        if (n.x > canvas.width - pad) { n.x = canvas.width - pad; n.vx *= -0.5; }
-        if (n.y < pad) { n.y = pad; n.vy *= -0.5; }
-        if (n.y > canvas.height - pad) { n.y = canvas.height - pad; n.vy *= -0.5; }
-    });
-
-    if (nucleons.length === 5) {
-        let avgX = nucleons.reduce((s, n) => s + n.x, 0) / 5;
-        let avgY = nucleons.reduce((s, n) => s + n.y, 0) / 5;
-        let maxSpread = Math.max(...nucleons.map(n => Math.sqrt((n.x - avgX)**2 + (n.y - avgY)**2)));
-
-        if (maxSpread < 32 && !nucleons.some(n => n.isAlphaComponent)) {
-            let neutrons = nucleons.filter(n => n.type === 'neutron');
-            neutrons.sort((a,b) => ((b.x-avgX)**2 + (b.y-avgY)**2) - ((a.x-avgX)**2 + (a.y-avgY)**2));
-            let escapeNeutron = neutrons[0];
-
-            nucleons.forEach(n => {
-                let angle = Math.atan2(n.y - avgY, n.x - avgX);
-                if (n === escapeNeutron) {
-                    n.isEjectedNeutron = true;
-                    n.vx = Math.cos(angle) * 15.0;
-                    n.vy = Math.sin(angle) * 15.0;
-                } else {
-                    n.isAlphaComponent = true;
-                    n.vx = -Math.cos(angle) * 3.0 + (n.x < avgX ? -1.5 : 1.5);
-                    n.vy = Math.sin(angle) * 1.5;
-                }
-            });
-
-            for (let i = 0; i < 16; i++) {
-                photons.push(new Photon(avgX, avgY, (i / 16) * Math.PI * 2));
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                if (this.isAlphaComponent) this.color = '#e11d48';
+                ctx.fillStyle = this.color;
+                ctx.fill();
+        
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 9px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                let label = this.type === 'proton' ? 'P+' : 'N0';
+                if (this.isAlphaComponent) label = '\u03B1';
+                if (this.isEjectedNeutron) label = 'n\u2070';
+                ctx.fillText(label, this.x, this.y);
             }
         }
-    }
-
-    nucleons.forEach(n => n.draw(ctx));
-    photons = photons.filter(p => p.life > 0);
-    photons.forEach(p => { p.update(); p.draw(ctx); });
-
-    requestAnimationFrame(mainSimulationEngine);
-}
-
-function applyFundamentalLaws(n1, n2) {
-    let dx = n2.x - n1.x;
-    let dy = n2.y - n1.y;
-    let r = Math.sqrt(dx * dx + dy * dy);
-    if (r < 0.1) return;
-
-    // --- 1. ACCURATE COULOMB LAW ---
-    // Repulsion between protons (charge * charge)
-    let f_coulomb = (KE * n1.charge * n2.charge) / (r * r);
-    
-    // --- 2. SCIENTIFIC YUKAWA POTENTIAL FOR STRONG FORCE ---
-    const MU = 0.15;        // Range modifier of the strong force field
-    const C_ATTRACT = 850;  // Strong force attraction scaling factor
-    const C_REPEL = 500000; // Core repulsion scaling factor (Pauli exclusion)
-    
-    let expTerm = Math.exp(-MU * r);
-    let f_strong_attract = C_ATTRACT * (expTerm / r) * (MU + (1 / r));
-    let f_strong_repel = C_REPEL / Math.pow(r, 7);
-    let f_strong = f_strong_repel - f_strong_attract;
-    
-    // Net Force: Electrostatic repulsion (+) vs Nuclear Net Strong Force (f_strong handles both)
-    // Positive net force pushes away, negative pulls together
-    let f_net = f_coulomb + f_strong;
-
-    // Prevent numerical explosions at microscopic distances
-    const FORCE_LIMIT = 400;
-    if (f_net > FORCE_LIMIT) f_net = FORCE_LIMIT;
-    if (f_net < -FORCE_LIMIT) f_net = -FORCE_LIMIT;
-
-    let fx = (dx / r) * f_net;
-    let fy = (dy / r) * f_net;
-
-    n1.vx -= fx * timeScale;
-    n1.vy -= fy * timeScale;
-    n2.vx += fx * timeScale;
-    n2.vy += fy * timeScale;
-}
-mainSimulationEngine();
+        
+        class Photon {
+            constructor(x, y, angle) {
+                this.x = x; this.y = y; this.speed = 12;
+                this.vx = Math.cos(angle) * this.speed;
+                this.vy = Math.sin(angle) * this.speed;
+                this.life = 1.0; this.decay = 0.02;
+            }
+            update() {
+                this.x += this.vx * timeScale;
+                this.y += this.vy * timeScale;
+                this.life -= this.decay * timeScale;
+            }
+            draw(ctx) {
+                ctx.save(); ctx.globalAlpha = this.life;
+                ctx.strokeStyle = '#a855f7'; ctx.lineWidth = 2;
+                ctx.beginPath(); ctx.moveTo(this.x, this.y);
+                for (let i = 0; i < 6; i++) {
+                    let evalX = this.x - (this.vx * i * 0.2);
+                    let evalY = this.y - (this.vy * i * 0.2);
+                    let waveOffset = Math.sin(Date.now() * 0.05 + i) * 4;
+                    let mag = Math.sqrt((-this.vy)**2 + this.vx**2) || 1;
+                    ctx.lineTo(evalX + (-this.vy / mag) * waveOffset, evalY + (this.vx / mag) * waveOffset);
+                }
+                ctx.stroke(); ctx.restore();
+            }
+        }
+        
+        document.getElementById('kevSlider').addEventListener('input', (e) => {
+            currentKeV = parseFloat(e.target.value);
+            document.getElementById('kevValue').innerText = currentKeV;
+        });
+        
+        const setTimeScale = (val) => {
+            timeScale = val; document.getElementById('timeSlider').value = val;
+            document.getElementById('timeValue').innerText = val.toFixed(1);
+            document.querySelectorAll('.speed-btn').forEach(b => b.classList.toggle('active', parseFloat(b.dataset.speed) === val));
+        };
+        document.getElementById('timeSlider').addEventListener('input', (e) => setTimeScale(parseFloat(e.target.value)));
+        document.querySelectorAll('.speed-btn').forEach(b => b.addEventListener('click', () => setTimeScale(parseFloat(b.dataset.speed))));
+        document.getElementById('btnReset').addEventListener('click', resetEngineEnvironment);
+        
+        let deuAngle = 0; let triAngle = 0;
+        
+        document.getElementById('deuAngleSlider').addEventListener('input', (e) => {
+            deuAngle = parseFloat(e.target.value) * Math.PI / 180;
+            document.getElementById('deuAngleValue').innerText = e.target.value;
+            if (deuteriumAssembled && !reactionTriggered) rotateCluster('D', 180, 275, deuAngle);
+        });
+        
+        document.getElementById('triAngleSlider').addEventListener('input', (e) => {
+            triAngle = parseFloat(e.target.value) * Math.PI / 180;
+            document.getElementById('triAngleValue').innerText = e.target.value;
+            if (tritiumAssembled && !reactionTriggered) rotateCluster('T', 720, 275, triAngle);
+        });
+        
+        document.getElementById('btnDeuterium').addEventListener('click', () => {
+            if (deuteriumAssembled) return;
+            let cx = 180, cy = 275;
+            let r0 = 16.0; // FIXED: Spawns the components much closer together
+            
+            nucleons.push(new Nucleon('proton', cx - r0, cy, 'D'), new Nucleon('neutron', cx + r0, cy, 'D'));
+            deuteriumAssembled = true; 
+            rotateCluster('D', cx, cy, deuAngle);
+            evalLaunchVerification();
+        });
+        
+        document.getElementById('btnTritium').addEventListener('click', () => {
+            if (tritiumAssembled) return;
+            let cx = 720, cy = 275;
+            let r_equil = 28.5; 
+            let h = r_equil * (Math.sqrt(3) / 2);
+            
+            nucleons.push(
+                new Nucleon('proton', cx, cy - (2/3)*h, 'T'),
+                new Nucleon('neutron', cx - r_equil/2, cy + (1/3)*h, 'T'),
+                new Nucleon('neutron', cx + r_equil/2, cy + (1/3)*h, 'T')
+            );
+            tritiumAssembled = true; 
+            rotateCluster('T', cx, cy, triAngle);
+            evalLaunchVerification();
+        });
+        
+        function rotateCluster(clusterType, cx, cy, rad) {
+            let filtered = nucleons.filter(n => n.clusterType === clusterType);
+            if (clusterType === 'D' && filtered.length === 2) {
+                let r0 = 16.0; // FIXED: Synced layout parameter for rotating closer structure
+                filtered[0].x = cx - Math.cos(rad) * r0; filtered[0].y = cy - Math.sin(rad) * r0;
+                filtered[1].x = cx + Math.cos(rad) * r0; filtered[1].y = cy + Math.sin(rad) * r0;
+            } else if (clusterType === 'T' && filtered.length === 3) {
+                let r_equil = 28.5, h = r_equil * (Math.sqrt(3) / 2); 
+                let points = [{x: 0, y: -(2/3)*h}, {x: -r_equil/2, y: (1/3)*h}, {x: r_equil/2, y: (1/3)*h}];
+                filtered.forEach((n, idx) => {
+                    let pt = points[idx];
+                    n.x = cx + (pt.x * Math.cos(rad) - pt.y * Math.sin(rad));
+                    n.y = cy + (pt.x * Math.sin(rad) + pt.y * Math.cos(rad));
+                    n.vx = 0; n.vy = 0; n.ax = 0; n.ay = 0;
+                });
+            }
+        }
+        
+        document.getElementById('btnLaunch').addEventListener('click', () => {
+            if (!deuteriumAssembled || !tritiumAssembled || reactionTriggered) return;
+            let speedFactor = 0.38;
+            let computedVelocity = Math.sqrt(currentKeV) * speedFactor;
+            nucleons.forEach(n => {
+                n.vx = (n.x < canvas.width / 2) ? computedVelocity : -computedVelocity;
+                n.vy = 0;
+            });
+            reactionTriggered = true;
+        });
+        
+        function evalLaunchVerification() {
+            if (deuteriumAssembled && tritiumAssembled) document.getElementById('btnLaunch').disabled = false;
+        }
+        
+        function resetEngineEnvironment() {
+            nucleons = []; photons = [];
+            deuteriumAssembled = false; tritiumAssembled = false; reactionTriggered = false;
+            document.getElementById('btnLaunch').disabled = true;
+        }
+        
+        function mainSimulationEngine() {
+            ctx.fillStyle = 'rgba(2, 6, 23, 0.4)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+            let dt = timeScale;
+        
+            nucleons.forEach(n => {
+                n.x += n.vx * dt + 0.5 * n.ax * dt * dt;
+                n.y += n.vy * dt + 0.5 * n.ay * dt * dt;
+                n.old_ax = n.ax;
+                n.old_ay = n.ay;
+                n.ax = 0; 
+                n.ay = 0;
+            });
+        
+            for (let i = 0; i < nucleons.length; i++) {
+                for (let j = i + 1; j < nucleons.length; j++) {
+                    computeInterNucleonForces(nucleons[i], nucleons[j]);
+                }
+            }
+        
+             nucleons.forEach(n => {
+                if (!reactionTriggered) {
+                    let speedSq = n.vx * n.vx + n.vy * n.vy;
+                    if (speedSq > 5) {
+                        n.vx *= 0.50; 
+                        n.vy *= 0.50;
+                    } else {
+                        n.vx *= 0.82; 
+                        n.vy *= 0.82;
+                    }
+                }
+                n.vx += 0.5 * (n.old_ax + n.ax) * dt;
+                n.vy += 0.5 * (n.old_ay + n.ay) * dt;
+        
+                let pad = n.radius;
+                if (n.x < pad) { n.x = pad; n.vx *=-0.5; }
+                if (n.x > canvas.width - pad) { n.x = canvas.width - pad; n.vx *= -0.5; }
+                if (n.y < pad) { n.y = pad; n.vy *= -0.5; }
+                if (n.y > canvas.height - pad) { n.y = canvas.height - pad; n.vy *= -0.5; }
+            });
+        
+            evaluateFusionState();
+        
+            nucleons.forEach(n => n.draw(ctx));
+            photons = photons.filter(p => p.life > 0);
+            photons.forEach(p => { p.update(); p.draw(ctx); });
+        
+            requestAnimationFrame(mainSimulationEngine);
+        }
+        
+        function computeInterNucleonForces(n1, n2) {
+            let dx = n2.x - n1.x;
+            let dy = n2.y - n1.y;
+            let r = Math.sqrt(dx * dx + dy * dy);
+            if (r < 0.1) return;
+        
+            let f_coulomb = (KE * n1.charge * n2.charge) / (r * r);
+            
+            const MU = 0.15;        
+            const C_ATTRACT = 850;  
+            let expTerm = Math.exp(-MU * r);
+            let f_strong_attract = C_ATTRACT * (expTerm / r) * (MU + (1 / r));
+            
+            // FIXED: Shifted Pauli distribution floor down to 14.0 to yield close-proximity stability
+            const QUANTUM_RADIUS = 14.0; 
+            const STEEPSET_FACTOR = 0.8; 
+            const C_PAULI = 120000;      
+            
+            let f_pauli_exclusion = C_PAULI / (1.0 + Math.exp((r - QUANTUM_RADIUS) / STEEPSET_FACTOR));
+            
+            let f_net = f_coulomb + f_pauli_exclusion - f_strong_attract;
+        
+            const FORCE_LIMIT = 800;
+            if (f_net > FORCE_LIMIT) f_net = FORCE_LIMIT;
+            if (f_net < -FORCE_LIMIT) f_net = -FORCE_LIMIT;
+        
+            let fx = (dx / r) * f_net;
+            let fy = (dy / r) * f_net;
+        
+            n1.ax -= fx / n1.mass;
+            n1.ay -= fy / n1.mass;
+            n2.ax += fx / n2.mass;
+            n2.ay += fy / n2.mass;
+        }
+        
+        function evaluateFusionState() {
+            if (nucleons.length !== 5) return;
+        
+            let avgX = nucleons.reduce((s, n) => s + n.x, 0) / 5;
+            let avgY = nucleons.reduce((s, n) => s + n.y, 0) / 5;
+            let maxSpread = Math.max(...nucleons.map(n => Math.sqrt((n.x - avgX)**2 + (n.y - avgY)**2)));
+        
+            if (maxSpread < 32 && !nucleons.some(n => n.isAlphaComponent)) {
+                let neutrons = nucleons.filter(n => n.type === 'neutron');
+                neutrons.sort((a,b) => ((b.x-avgX)**2 + (b.y-avgY)**2) - ((a.x-avgX)**2 + (a.y-avgY)**2));
+                let escapeNeutron = neutrons[0];
+        
+                nucleons.forEach(n => {
+                    let angle = Math.atan2(n.y - avgY, n.x - avgX);
+                    if (n === escapeNeutron) {
+                        n.isEjectedNeutron = true;
+                        n.vx = Math.cos(angle) * 15.0;
+                        n.vy = Math.sin(angle) * 15.0;
+                    } else {
+                        n.isAlphaComponent = true;
+                        n.vx = -Math.cos(angle) * 3.0 + (n.x < avgX ? -1.5 : 1.5);
+                        n.vy = Math.sin(angle) * 1.5;
+                    }
+                });
+        
+                for (let i = 0; i < 16; i++) {
+                    photons.push(new Photon(avgX, avgY, (i / 16) * Math.PI * 2));
+                }
+            }
+        }
+        
+        mainSimulationEngine();
+        </script>
 </script>
 </body>
 </html>
