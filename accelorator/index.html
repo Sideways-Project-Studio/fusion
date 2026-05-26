@@ -161,6 +161,10 @@
                 <label for="triAngleSlider">T Angle: <span id="triAngleValue">0</span>&deg;</label>
                 <input type="range" id="triAngleSlider" min="0" max="359" value="0" step="1">
             </div>
+            <div class="slider-group">
+                <label for="impactOffsetSlider">Impact Offset: <span id="impactOffsetValue">0.2</span></label>
+                <input type="range" id="impactOffsetSlider" min="0" max="2.0" value="0.2" step="0.05">
+            </div>
         </div>
     </div>
 
@@ -360,13 +364,19 @@
             }
         }
         
+        let impactOffset = 0.2;
+        document.getElementById('impactOffsetSlider').addEventListener('input', (e) => {
+            impactOffset = parseFloat(e.target.value);
+            document.getElementById('impactOffsetValue').innerText = impactOffset.toFixed(2);
+        });
+
         document.getElementById('btnLaunch').addEventListener('click', () => {
             if (!deuteriumAssembled || !tritiumAssembled || reactionTriggered) return;
             let speedFactor = 0.38;
             let computedVelocity = Math.sqrt(currentKeV) * speedFactor;
             nucleons.forEach(n => {
                 n.vx = (n.x < canvas.width / 2) ? computedVelocity : -computedVelocity;
-                n.vy = 0;
+                n.vy = (Math.random() - 0.5) * impactOffset;
             });
             reactionTriggered = true;
         });
