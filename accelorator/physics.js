@@ -126,6 +126,7 @@ const FusionPhysics = (() => {
             filtered[1].x = cx + Math.cos(rad) * r0;
             filtered[1].y = cy + Math.sin(rad) * r0;
         } else if (clusterType === 'T' && filtered.length === 3) {
+            // FIX: Boosted to 24.0px to stop instant overlap explosions upon spawn
             let r_equil = 24.0;
             let h = r_equil * (Math.sqrt(3) / 2);
             let points = [
@@ -145,41 +146,43 @@ const FusionPhysics = (() => {
         });
     }
 
-    // Now ONLY computes long-range field effects (Coulomb barrier & initial attraction)
     function computeInterNucleonForces(n1, n2) {
-        if (n1.clusterType === n2.clusterType && n1.clusterType !== 'Alpha') return;
-
         let dx = n2.x - n1.x;
         let dy = n2.y - n1.y;
         let r = Math.sqrt(dx * dx + dy * dy);
         if (r < 0.1) return;
-
-        // 1. Long-range Coulomb Repulsion
+    
+        // 1. Long-range Coulomb Repulsion (Protons only)
         let f_coulomb = (COULOMB_CONSTANT * n1.charge * n2.charge) / (r * r);
-
-        // 2. Long-range Strong Force Attraction
-        const MU = 0.15;
-        let C_ATTRACT = 1200; 
-        if (r < 24.0) C_ATTRACT = 3500; 
-
-        let expTerm = Math.exp(-MU * r);
-        let f_strong_attract = C_ATTRACT * (expTerm / r) * (MU + (1 / r));
-
-        // Combined Net macro-force (No Pauli exclusion formula needed anymore!)
-        let f_net = f_coulomb - f_strong_attract;
-
+    
+        // 2. Realistic Strong Force (Yukawa Attraction + Core Repulsion Well)
+        const SIGMA = 24.0; 
+        let f_strong = 0;
+    
+        if ((n1.clusterType === 'Alpha' && n2.clusterType === 'Alpha') || (r < 45)) {
+            let attractive = Math.pow(SIGMA / r, 4);  
+            let repulsive = Math.pow(SIGMA / r, 8);   
+            
+            const C_STRONG = 8000; 
+            f_strong = C_STRONG * (repulsive - attractive);
+        } else {
+            const MU = 0.15;
+            let expTerm = Math.exp(-MU * r);
+            f_strong = -3500 * (expTerm / r) * (MU + (1 / r));
+        }
+    
+        let f_net = f_coulomb + f_strong;
+    
         let fx = (dx / r) * f_net;
         let fy = (dy / r) * f_net;
-
+    
         n1.ax -= fx / n1.mass;
         n1.ay -= fy / n1.mass;
         n2.ax += fx / n2.mass;
         n2.ay += fy / n2.mass;
     }
 
-    // THE UNIFIED ENGINE CONSTRAINTS: Resolves structural shapes AND overlapping entirely via geometry
     function applyUnifiedConstraints(nucleons) {
-        // Run solver passes (More passes = crisper, stiffer physical boundaries)
         const SOLVER_PASSES = 5; 
 
         for (let pass = 0; pass < SOLVER_PASSES; pass++) {
@@ -192,28 +195,26 @@ const FusionPhysics = (() => {
                     let dy = n2.y - n1.y;
                     let dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
 
-                    // Condition A: They belong to the same un-fused parent ion configuration
+                    // Condition A: Inside un-fused ions
                     if (n1.clusterType === n2.clusterType && n1.clusterType !== 'Alpha' && n1.clusterType !== 'Free') {
-                        let targetDist = (n1.clusterType === 'D') ? 24.0 : 23.5;
+                        // FIX: Synchronized to 24.0 so your structural target completely agrees with physical radii bounds
+                        let targetDist = 24.0; 
                         let difference = targetDist - dist;
                         let percent = (difference / dist) * 0.5;
                         
                         n1.x -= dx * percent; n1.y -= dy * percent;
                         n2.x += dx * percent; n2.y += dy * percent;
                     } 
-                    
-                    // Condition B: General Solid Boundary Overlapping (Replaces Pauli Exclusion Core)
+                    // Condition B: Hard Solid Boundary Overlapping
                     else {
-                        let minDist = n1.radius + n2.radius; // 24px hard boundary
+                        let minDist = n1.radius + n2.radius; 
                         if (dist < minDist) {
                             let difference = minDist - dist;
-                            // Push apart symmetrically based on geometric collision depth
                             let percent = (difference / dist) * 0.5;
 
                             n1.x -= dx * percent; n1.y -= dy * percent;
                             n2.x += dx * percent; n2.y += dy * percent;
                             
-                            // Friction Damping on contact velocities to keep things smooth
                             let rvx = n2.vx - n1.vx;
                             let rvy = n2.vy - n1.vy;
                             n1.vx += rvx * 0.05; n1.vy += rvy * 0.05;
@@ -227,39 +228,77 @@ const FusionPhysics = (() => {
 
     function evaluateFusionState(sim) {
         if (sim.nucleons.length !== 5 || sim.fusionOccurred) return;
-
-        let avgX = sim.nucleons.reduce((s, n) => s + n.x, 0) / 5;
-        let avgY = sim.nucleons.reduce((s, n) => s + n.y, 0) / 5;
-
+    
+        // 1. Calculate Center of Mass (COM) Position and Net Momentum
+        let totalMass = 0;
+        let sumX = 0, sumY = 0;
+        let netVx = 0, netVy = 0;
+    
+        sim.nucleons.forEach(n => {
+            sumX += n.x * n.mass;
+            sumY += n.y * n.mass;
+            netVx += n.vx * n.mass; // Momentum X
+            netVy += n.vy * n.mass; // Momentum Y
+            totalMass += n.mass;
+        });
+    
+        let avgX = sumX / totalMass;
+        let avgY = sumY / totalMass;
+        
+        // System velocity (velocity of the center of mass)
+        let v_com_x = netVx / totalMass;
+        let v_com_y = netVy / totalMass;
+    
         let maxSpread = Math.max(...sim.nucleons.map(n =>
             Math.sqrt((n.x - avgX) ** 2 + (n.y - avgY) ** 2)
         ));
-
-        // Fusion triggers naturally if macro forces pulled them within capture radius
-        if (maxSpread < 42) {
+    
+        // Trigger threshold (adjusted to clear structural constraints safely)
+        if (maxSpread < 45) {
             let neutrons = sim.nucleons.filter(n => n.type === 'neutron');
+            // Sort farthest from center to find the escaping neutron
             neutrons.sort((a, b) =>
                 ((b.x - avgX) ** 2 + (b.y - avgY) ** 2) -
                 ((a.x - avgX) ** 2 + (a.y - avgY) ** 2)
             );
             let escapeNeutron = neutrons[0];
-
+    
+            // Random or impact-dependent ejection angle
+            let angle = Math.atan2(escapeNeutron.y - avgY, escapeNeutron.x - avgX);
+    
+            /* * PHYSICS CALIBRATION
+             * Target: Neutron KE = 14.1 MeV, Alpha KE = 3.5 MeV
+             * Since KE = 0.5 * m * v^2 
+             * For Neutron (m=1): v = sqrt(2 * KE / STANDARD_SCALE)
+             * If standard scale is 0.005: v_neutron = sqrt(2 * 14.1 / 0.005) = sqrt(5640) ≈ 75.1
+             * * However, your code uses a custom MEV_SCALE (0.055078) for the neutron.
+             * Let's derive physical velocities matching your internal energy readers precisely:
+             */
+            const V_NEUTRON_REL = 16.0;             // Calibrates exactly to 14.1 MeV in your engine
+            const V_ALPHA_REL = V_NEUTRON_REL / 4.0; // 4.0 speed ratio due to mass conservation (m_alpha=4, m_n=1)
+    
             sim.nucleons.forEach(n => {
                 if (n === escapeNeutron) {
-                    let angle = Math.atan2(n.y - avgY, n.x - avgX);
-                    n.isEjectedNeutron = true;
-                    n.vx = Math.cos(angle) * 16.0;
-                    n.vy = Math.sin(angle) * 16.0;
                     n.clusterType = 'Free';
+                    n.isEjectedNeutron = true;
+                    
+                    // Final velocity = System velocity + Ejection velocity vector
+                    n.vx = v_com_x + Math.cos(angle) * V_NEUTRON_REL;
+                    n.vy = v_com_y + Math.sin(angle) * V_NEUTRON_REL;
                 } else {
-                    n.isAlphaComponent = true;
                     n.clusterType = 'Alpha';
+                    n.isAlphaComponent = true;
+                    
+                    // Recoil direction is exactly 180 degrees opposite
+                    n.vx = v_com_x - Math.cos(angle) * V_ALPHA_REL;
+                    n.vy = v_com_y - Math.sin(angle) * V_ALPHA_REL;
                 }
             });
-
+    
             sim.fusionOccurred = true;
             sim.fusionSlowFactor = sim.fusionMinDt;
-
+    
+            // Generate isotropic gamma photon burst
             for (let i = 0; i < 16; i++) {
                 sim.photons.push(new Photon(avgX, avgY, (i / 16) * Math.PI * 2));
             }
@@ -327,7 +366,7 @@ const FusionPhysics = (() => {
             n.ay = 0;
         });
 
-        // 3. Apply Unified Constraints (Instantly repairs any integration errors or overlaps)
+        // 3. Apply Unified Constraints
         applyUnifiedConstraints(sim.nucleons);
 
         // 4. Update Velocities out from integrated constraint points
@@ -358,9 +397,12 @@ const FusionPhysics = (() => {
 
             let speed = Math.sqrt(n.vx * n.vx + n.vy * n.vy);
             if (speed > MAX_SPEED) {
-                let scale = MAX_SPEED / speed;
-                n.vx *= scale;
-                n.vy *= scale;
+                // Only clamp speeds for incoming Deuterium and Tritium ions
+                if (!n.isEjectedNeutron && !n.isAlphaComponent) {
+                    let scale = MAX_SPEED / speed;
+                    n.vx *= scale;
+                    n.vy *= scale;
+                }
             }
 
             if (!n.isEjectedNeutron) {
