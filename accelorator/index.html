@@ -293,6 +293,10 @@
                 <label for="impactOffsetSlider">Impact Offset: <span id="impactOffsetValue">0.2</span></label>
                 <input type="range" id="impactOffsetSlider" min="0" max="2.0" value="0.2" step="0.05">
             </div>
+            <div class="slider-group" title="Peak magnetic field strength at the confinement boundary. Higher = tighter confinement for charged particles. Zero = no confinement.">
+                <label for="bMaxSlider">B-Field: <span id="bMaxValue">3.0</span> T</label>
+                <input type="range" id="bMaxSlider" min="0" max="10" value="3.0" step="0.1">
+            </div>
         </div>
         <div class="control-row" style="border-top:1px solid #334155; padding-top:8px; margin-top:2px;">
             <span style="font-size:12px; color:#94a3b8; font-weight:600; letter-spacing:0.5px;">SLOW-MOTION REPLAY</span>
@@ -357,6 +361,10 @@
             <div class="legend-swatch" style="background:#facc15;"></div>
             <span>Alpha (⁴He)</span>
         </div>
+        <div class="legend-item">
+            <div class="legend-field" style="background:#3b82f6;"></div>
+            <span>Magnetic Confinement (B⊙)</span>
+        </div>
     </div>
 
     <div id="energyGraphContainer">
@@ -367,7 +375,7 @@
 
     <script src="physics.js"></script>
     <script>
-        const { Nucleon, Photon, rotateCluster, step: physicsStep } = FusionPhysics;
+        const { Nucleon, Photon, rotateCluster, step: physicsStep, MAGNETIC_ZONE } = FusionPhysics;
 
         const canvas = document.getElementById('physicsCanvas');
         const ctx = canvas.getContext('2d');
@@ -389,7 +397,9 @@
             impactOffset: 0.2,
             deuAngle: 0,
             triAngle: 0,
-            paused: false
+            paused: false,
+            neutronEscaped: null,
+            bMax: 3.0
         };
 
         const MAX_HISTORY = 2000;
@@ -476,12 +486,94 @@
         function redrawCanvas() {
             ctx.fillStyle = '#020617';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
+            drawMagneticField();
             sim.nucleons.forEach(n => n.draw(ctx));
             sim.photons.forEach(p => p.draw(ctx));
+            drawNeutronEscape();
             drawHUD();
         }
 
         let lastStepInfo = { dt: 1, adaptiveFactor: 1, minDist: Infinity };
+
+        function drawMagneticField() {
+            const Z = MAGNETIC_ZONE;
+            const W = canvas.width;
+            const H = canvas.height;
+            ctx.save();
+
+            let grad;
+            grad = ctx.createLinearGradient(0, 0, Z, 0);
+            grad.addColorStop(0, 'rgba(59, 130, 246, 0.22)');
+            grad.addColorStop(0.6, 'rgba(59, 130, 246, 0.06)');
+            grad.addColorStop(1, 'rgba(59, 130, 246, 0)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, Z, H);
+
+            grad = ctx.createLinearGradient(W, 0, W - Z, 0);
+            grad.addColorStop(0, 'rgba(59, 130, 246, 0.22)');
+            grad.addColorStop(0.6, 'rgba(59, 130, 246, 0.06)');
+            grad.addColorStop(1, 'rgba(59, 130, 246, 0)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(W - Z, 0, Z, H);
+
+            grad = ctx.createLinearGradient(0, 0, 0, Z);
+            grad.addColorStop(0, 'rgba(59, 130, 246, 0.22)');
+            grad.addColorStop(0.6, 'rgba(59, 130, 246, 0.06)');
+            grad.addColorStop(1, 'rgba(59, 130, 246, 0)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, W, Z);
+
+            grad = ctx.createLinearGradient(0, H, 0, H - Z);
+            grad.addColorStop(0, 'rgba(59, 130, 246, 0.22)');
+            grad.addColorStop(0.6, 'rgba(59, 130, 246, 0.06)');
+            grad.addColorStop(1, 'rgba(59, 130, 246, 0)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, H - Z, W, Z);
+
+            ctx.strokeStyle = 'rgba(96, 165, 250, 0.18)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([6, 10]);
+            ctx.beginPath();
+            ctx.rect(Z, Z, W - Z * 2, H - Z * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            ctx.font = '9px monospace';
+            ctx.fillStyle = 'rgba(96, 165, 250, 0.35)';
+            ctx.textAlign = 'center';
+            ctx.fillText('B ⊙', Z / 2, H / 2 - 6);
+            ctx.fillText('B ⊙', W - Z / 2, H / 2 - 6);
+            ctx.fillText('B ⊙', W / 2, Z / 2 + 2);
+            ctx.fillText('B ⊙', W / 2, H - Z / 2 + 2);
+
+            ctx.restore();
+        }
+
+        function drawNeutronEscape() {
+            if (!sim.neutronEscaped) return;
+            let elapsed = Date.now() - sim.neutronEscaped.time;
+            if (elapsed > 3000) { sim.neutronEscaped = null; return; }
+
+            let alpha = 1 - (elapsed / 3000);
+            let ex = sim.neutronEscaped.x;
+            let ey = sim.neutronEscaped.y;
+
+            ctx.save();
+
+            let rippleR = 10 + elapsed * 0.06;
+            ctx.beginPath();
+            ctx.arc(ex, ey, rippleR, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(59, 130, 246, ${alpha * 0.5})`;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = '#60a5fa';
+            ctx.font = 'bold 12px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('n\u2070 escaped confinement', canvas.width / 2, canvas.height - 40);
+            ctx.restore();
+        }
 
         function drawHUD() {
             ctx.save();
@@ -598,6 +690,11 @@
             document.getElementById('fusionRecoveryValue').innerText = e.target.value;
         });
 
+        document.getElementById('bMaxSlider').addEventListener('input', (e) => {
+            sim.bMax = parseFloat(e.target.value);
+            document.getElementById('bMaxValue').innerText = sim.bMax.toFixed(1);
+        });
+
         document.getElementById('deuAngleSlider').addEventListener('input', (e) => {
             sim.deuAngle = parseFloat(e.target.value) * Math.PI / 180;
             document.getElementById('deuAngleValue').innerText = e.target.value;
@@ -669,6 +766,7 @@
             sim.reactionTriggered = false;
             sim.fusionOccurred = false;
             sim.fusionSlowFactor = 1.0;
+            sim.neutronEscaped = null;
             sim.paused = false;
             document.getElementById('btnLaunch').disabled = true;
             document.getElementById('btnPause').textContent = '⏸';
@@ -691,6 +789,8 @@
             ctx.fillStyle = 'rgba(2, 6, 23, 0.4)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+            drawMagneticField();
+
             if (sim.nucleons.length > 0) pushHistory();
 
             lastStepInfo = physicsStep(sim, canvas.width, canvas.height);
@@ -700,6 +800,7 @@
             sim.photons = sim.photons.filter(p => p.life > 0);
             sim.photons.forEach(p => { p.update(sim.timeScale); p.draw(ctx); });
 
+            drawNeutronEscape();
             drawHUD();
 
             requestAnimationFrame(mainSimulationEngine);
@@ -752,6 +853,14 @@
             if (energyHistory.length > GRAPH_HISTORY) energyHistory.shift();
         }
 
+        function formatEnergy(mev) {
+            if (mev >= 1.0) {
+                return `${mev.toFixed(1)} MeV`;
+            } else {
+                return `${(mev * 1000).toFixed(0)} keV`;
+            }
+        }
+
         function updateGraphLegend() {
             const container = document.getElementById('graphLegend');
             if (energyHistory.length === 0) { container.innerHTML = ''; return; }
@@ -760,7 +869,7 @@
             last.forEach(p => {
                 html += `<div class="graph-legend-item">
                     <div class="graph-legend-line" style="background:${p.color};"></div>
-                    <span>${p.label}: <strong style="color:#e2e8f0">${p.ke.toFixed(1)}</strong> keV</span>
+                    <span>${p.label}: <strong style="color:#e2e8f0">${formatEnergy(p.ke)}</strong></span>
                 </div>`;
             });
             container.innerHTML = html;
@@ -775,11 +884,18 @@
             const gw = w - GRAPH_PAD.left - GRAPH_PAD.right;
             const gh = h - GRAPH_PAD.top - GRAPH_PAD.bottom;
 
-            let maxKE = 1;
+            let maxKE = 0.001;
             energyHistory.forEach(frame => {
                 frame.forEach(p => { if (p.ke > maxKE) maxKE = p.ke; });
             });
-            maxKE = Math.ceil(maxKE / 10) * 10 || 10;
+            let graphInMeV = maxKE >= 1.0;
+            if (graphInMeV) {
+                maxKE = Math.ceil(maxKE / 2) * 2 || 2;
+            } else {
+                let keVMax = maxKE * 1000;
+                keVMax = Math.ceil(keVMax / 10) * 10 || 10;
+                maxKE = keVMax / 1000;
+            }
 
             eCtx.save();
             eCtx.strokeStyle = 'rgba(51,65,85,0.35)';
@@ -797,7 +913,8 @@
                 eCtx.textAlign = 'right';
                 eCtx.textBaseline = 'middle';
                 let val = maxKE - (maxKE / yTicks) * i;
-                eCtx.fillText(val.toFixed(0), GRAPH_PAD.left - 8, yy);
+                let tickLabel = graphInMeV ? val.toFixed(1) : (val * 1000).toFixed(0);
+                eCtx.fillText(tickLabel, GRAPH_PAD.left - 8, yy);
             }
 
             eCtx.save();
@@ -806,7 +923,7 @@
             eCtx.fillStyle = '#475569';
             eCtx.font = '10px sans-serif';
             eCtx.textAlign = 'center';
-            eCtx.fillText('KE (keV)', 0, 0);
+            eCtx.fillText(graphInMeV ? 'KE (MeV)' : 'KE (keV)', 0, 0);
             eCtx.restore();
 
             eCtx.fillStyle = '#475569';

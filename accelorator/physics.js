@@ -2,6 +2,8 @@ const FusionPhysics = (() => {
 
     const COULOMB_CONSTANT = 1000;
     const MAX_SPEED = 25;
+    const MAGNETIC_ZONE = 70;
+    const B_MAX = 3.0;
 
     class Nucleon {
         constructor(type, x, y, clusterType) {
@@ -24,7 +26,16 @@ const FusionPhysics = (() => {
         }
 
         kineticEnergy() {
-            return 0.5 * this.mass * (this.vx * this.vx + this.vy * this.vy);
+            let pixelEnergy = 0.5 * this.mass * (this.vx * this.vx + this.vy * this.vy);
+
+            if (this.isEjectedNeutron) {
+                // Calibrates a visual velocity of 16.0 to read exactly 14.1 MeV
+                const MEV_SCALE = 0.055078;
+                return pixelEnergy * MEV_SCALE;
+            }
+
+            const STANDARD_SCALE = 0.005;
+            return pixelEnergy * STANDARD_SCALE;
         }
 
         draw(ctx) {
@@ -333,6 +344,18 @@ const FusionPhysics = (() => {
             n.vx += 0.5 * (n.old_ax + n.ax) * dt;
             n.vy += 0.5 * (n.old_ay + n.ay) * dt;
 
+            if (n.charge > 0) {
+                let distFromEdge = Math.min(n.x, canvasWidth - n.x, n.y, canvasHeight - n.y);
+                if (distFromEdge < MAGNETIC_ZONE) {
+                    let depth = 1 - (distFromEdge / MAGNETIC_ZONE);
+                    let B = (sim.bMax !== undefined ? sim.bMax : B_MAX) * depth * depth;
+                    let dvx = n.charge * n.vy * B * dt;
+                    let dvy = -n.charge * n.vx * B * dt;
+                    n.vx += dvx;
+                    n.vy += dvy;
+                }
+            }
+
             let speed = Math.sqrt(n.vx * n.vx + n.vy * n.vy);
             if (speed > MAX_SPEED) {
                 let scale = MAX_SPEED / speed;
@@ -340,14 +363,31 @@ const FusionPhysics = (() => {
                 n.vy *= scale;
             }
 
-            let pad = n.radius;
-            if (n.x < pad) { n.x = pad; n.vx *= -0.5; }
-            if (n.x > canvasWidth - pad) { n.x = canvasWidth - pad; n.vx *= -0.5; }
-            if (n.y < pad) { n.y = pad; n.vy *= -0.5; }
-            if (n.y > canvasHeight - pad) { n.y = canvasHeight - pad; n.vy *= -0.5; }
+            if (!n.isEjectedNeutron) {
+                let pad = n.radius;
+                if (n.x < pad) { n.x = pad; n.vx = Math.abs(n.vx) * 0.5; }
+                if (n.x > canvasWidth - pad) { n.x = canvasWidth - pad; n.vx = -Math.abs(n.vx) * 0.5; }
+                if (n.y < pad) { n.y = pad; n.vy = Math.abs(n.vy) * 0.5; }
+                if (n.y > canvasHeight - pad) { n.y = canvasHeight - pad; n.vy = -Math.abs(n.vy) * 0.5; }
+            }
         });
 
         evaluateFusionState(sim);
+
+        const REMOVAL_MARGIN = 150;
+        sim.nucleons = sim.nucleons.filter(n => {
+            if (!n.isEjectedNeutron) return true;
+            if (n.x < -REMOVAL_MARGIN || n.x > canvasWidth + REMOVAL_MARGIN ||
+                n.y < -REMOVAL_MARGIN || n.y > canvasHeight + REMOVAL_MARGIN) {
+                sim.neutronEscaped = {
+                    x: Math.max(0, Math.min(canvasWidth, n.x)),
+                    y: Math.max(0, Math.min(canvasHeight, n.y)),
+                    time: Date.now()
+                };
+                return false;
+            }
+            return true;
+        });
 
         return { dt, adaptiveFactor, minDist };
     }
@@ -357,7 +397,8 @@ const FusionPhysics = (() => {
         Photon,
         rotateCluster,
         evaluateFusionState,
-        step
+        step,
+        MAGNETIC_ZONE
     };
 
 })();
