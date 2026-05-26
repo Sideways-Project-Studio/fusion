@@ -305,6 +305,37 @@ const FusionPhysics = (() => {
         }
     }
 
+    function computeStrongForceReadout(nucleons) {
+        const pairs = [];
+        const SIGMA = 24.0;
+        for (let i = 0; i < nucleons.length; i++) {
+            for (let j = i + 1; j < nucleons.length; j++) {
+                const n1 = nucleons[i];
+                const n2 = nucleons[j];
+                const dx = n2.x - n1.x;
+                const dy = n2.y - n1.y;
+                const r = Math.sqrt(dx * dx + dy * dy);
+                if (r < 0.1) continue;
+
+                let f_strong = 0;
+                if ((n1.clusterType === 'Alpha' && n2.clusterType === 'Alpha') || (r < 45)) {
+                    const attractive = Math.pow(SIGMA / r, 4);
+                    const repulsive = Math.pow(SIGMA / r, 8);
+                    f_strong = 8000 * (repulsive - attractive);
+                } else {
+                    const MU = 0.15;
+                    const expTerm = Math.exp(-MU * r);
+                    f_strong = -3500 * (expTerm / r) * (MU + (1 / r));
+                }
+
+                const f_coulomb = (COULOMB_CONSTANT * n1.charge * n2.charge) / (r * r);
+
+                pairs.push({ i, j, n1, n2, distance: r, strongForce: f_strong, coulombForce: f_coulomb });
+            }
+        }
+        return pairs;
+    }
+
     function computeMinInterClusterDistance(nucleons) {
         let minDist = Infinity;
         for (let i = 0; i < nucleons.length; i++) {
@@ -439,6 +470,7 @@ const FusionPhysics = (() => {
         Photon,
         rotateCluster,
         evaluateFusionState,
+        computeStrongForceReadout,
         step,
         MAGNETIC_ZONE
     };

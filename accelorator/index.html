@@ -246,6 +246,53 @@
             border-radius: 2px;
             flex-shrink: 0;
         }
+        #strongForceGraphContainer {
+            width: 100%;
+            max-width: 920px;
+            margin-top: 14px;
+            background: linear-gradient(180deg, rgba(15,23,42,0.95) 0%, rgba(2,6,23,0.98) 100%);
+            border: 1px solid #1e293b;
+            border-radius: 12px;
+            padding: 16px 16px 10px 16px;
+            box-sizing: border-box;
+            box-shadow: 0 8px 32px -8px rgba(0,0,0,0.4);
+        }
+        #strongForceGraphTitle {
+            font-size: 13px;
+            font-weight: 600;
+            color: #94a3b8;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        #strongForceGraphTitle::before {
+            content: '';
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #22c55e;
+            box-shadow: 0 0 6px #22c55e;
+            animation: pulse-dot 2s infinite;
+        }
+        #strongForceCanvas {
+            width: 100%;
+            height: 200px;
+            border-radius: 8px;
+            background: #020617;
+            display: block;
+        }
+        #strongForceLegend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px 16px;
+            margin-top: 8px;
+            font-size: 11px;
+            color: #64748b;
+        }
     </style>
 </head>
 <body>
@@ -373,9 +420,15 @@
         <div id="graphLegend"></div>
     </div>
 
+    <div id="strongForceGraphContainer">
+        <div id="strongForceGraphTitle">Strong Nuclear Force (per pair)</div>
+        <canvas id="strongForceCanvas"></canvas>
+        <div id="strongForceLegend"></div>
+    </div>
+
     <script src="physics.js"></script>
     <script>
-        const { Nucleon, Photon, rotateCluster, step: physicsStep, MAGNETIC_ZONE } = FusionPhysics;
+        const { Nucleon, Photon, rotateCluster, computeStrongForceReadout, step: physicsStep, MAGNETIC_ZONE } = FusionPhysics;
 
         const canvas = document.getElementById('physicsCanvas');
         const ctx = canvas.getContext('2d');
@@ -776,6 +829,8 @@
             updateStepIndicator();
             energyHistory = [];
             document.getElementById('graphLegend').innerHTML = '';
+            sfHistory = [];
+            document.getElementById('strongForceLegend').innerHTML = '';
         }
 
         // --- Main Render Loop ---
@@ -990,6 +1045,208 @@
             requestAnimationFrame(energyGraphLoop);
         }
         energyGraphLoop();
+
+        // --- Strong Force Graph ---
+
+        const sfCanvas = document.getElementById('strongForceCanvas');
+        const sfCtx = sfCanvas.getContext('2d');
+        const SF_HISTORY = 300;
+        const SF_PAD = { top: 18, right: 14, bottom: 28, left: 56 };
+        let sfHistory = [];
+        let sfFrame = 0;
+
+        const PAIR_COLORS = [
+            '#22c55e', '#f87171', '#60a5fa', '#fbbf24', '#a78bfa',
+            '#fb923c', '#38bdf8', '#f472b6', '#facc15', '#c084fc'
+        ];
+
+        function resizeSFCanvas() {
+            const rect = sfCanvas.getBoundingClientRect();
+            sfCanvas.width = rect.width * devicePixelRatio;
+            sfCanvas.height = rect.height * devicePixelRatio;
+            sfCtx.scale(devicePixelRatio, devicePixelRatio);
+        }
+        resizeSFCanvas();
+        window.addEventListener('resize', resizeSFCanvas);
+
+        function getPairLabel(p) {
+            function name(n) {
+                if (n.isEjectedNeutron) return 'n⁰';
+                if (n.isAlphaComponent) return (n.type === 'proton' ? 'αP' : 'αN');
+                let pre = n.clusterType === 'D' ? 'D' : n.clusterType === 'T' ? 'T' : '';
+                let sym = n.type === 'proton' ? 'P+' : 'N0';
+                return pre ? `${pre}-${sym}` : sym;
+            }
+            return `${name(p.n1)}↔${name(p.n2)}`;
+        }
+
+        function sampleStrongForces() {
+            if (sim.nucleons.length < 2) return;
+            const pairs = computeStrongForceReadout(sim.nucleons);
+            const frame = pairs.map((p, idx) => ({
+                force: p.strongForce,
+                dist: p.distance,
+                label: getPairLabel(p),
+                color: PAIR_COLORS[idx % PAIR_COLORS.length]
+            }));
+            sfHistory.push(frame);
+            if (sfHistory.length > SF_HISTORY) sfHistory.shift();
+        }
+
+        function formatForce(f) {
+            const a = Math.abs(f);
+            if (a >= 1000) return (f / 1000).toFixed(1) + 'k';
+            return f.toFixed(0);
+        }
+
+        function updateSFLegend() {
+            const container = document.getElementById('strongForceLegend');
+            if (sfHistory.length === 0) { container.innerHTML = ''; return; }
+            const last = sfHistory[sfHistory.length - 1];
+            let html = '';
+            last.forEach(p => {
+                const typeTag = p.force > 50 ? '<span style="color:#ef4444">repel</span>'
+                              : p.force < -50 ? '<span style="color:#22c55e">attract</span>'
+                              : '<span style="color:#64748b">~0</span>';
+                html += `<div class="graph-legend-item">
+                    <div class="graph-legend-line" style="background:${p.color};"></div>
+                    <span>${p.label}: <strong style="color:#e2e8f0">${formatForce(p.force)}</strong> ${typeTag}</span>
+                </div>`;
+            });
+            container.innerHTML = html;
+        }
+
+        function drawSFGraph() {
+            const w = sfCanvas.getBoundingClientRect().width;
+            const h = sfCanvas.getBoundingClientRect().height;
+            sfCtx.clearRect(0, 0, w, h);
+
+            const gw = w - SF_PAD.left - SF_PAD.right;
+            const gh = h - SF_PAD.top - SF_PAD.bottom;
+
+            let maxAbs = 100;
+            sfHistory.forEach(frame => {
+                frame.forEach(p => { const a = Math.abs(p.force); if (a > maxAbs) maxAbs = a; });
+            });
+            maxAbs = Math.ceil(maxAbs / 500) * 500 || 500;
+
+            const midY = SF_PAD.top + gh / 2;
+
+            sfCtx.save();
+
+            // zero line
+            sfCtx.strokeStyle = 'rgba(100,116,139,0.4)';
+            sfCtx.lineWidth = 1;
+            sfCtx.setLineDash([4, 4]);
+            sfCtx.beginPath();
+            sfCtx.moveTo(SF_PAD.left, midY);
+            sfCtx.lineTo(SF_PAD.left + gw, midY);
+            sfCtx.stroke();
+            sfCtx.setLineDash([]);
+
+            // grid
+            sfCtx.strokeStyle = 'rgba(51,65,85,0.35)';
+            sfCtx.lineWidth = 0.5;
+            const yTicks = 6;
+            for (let i = 0; i <= yTicks; i++) {
+                let yy = SF_PAD.top + (gh / yTicks) * i;
+                sfCtx.beginPath();
+                sfCtx.moveTo(SF_PAD.left, yy);
+                sfCtx.lineTo(SF_PAD.left + gw, yy);
+                sfCtx.stroke();
+
+                sfCtx.fillStyle = '#475569';
+                sfCtx.font = '10px monospace';
+                sfCtx.textAlign = 'right';
+                sfCtx.textBaseline = 'middle';
+                let val = maxAbs - (2 * maxAbs / yTicks) * i;
+                sfCtx.fillText(formatForce(val), SF_PAD.left - 8, yy);
+            }
+
+            // Y-axis label
+            sfCtx.save();
+            sfCtx.translate(12, SF_PAD.top + gh / 2);
+            sfCtx.rotate(-Math.PI / 2);
+            sfCtx.fillStyle = '#475569';
+            sfCtx.font = '10px sans-serif';
+            sfCtx.textAlign = 'center';
+            sfCtx.fillText('F_strong', 0, 0);
+            sfCtx.restore();
+
+            // zone labels
+            sfCtx.fillStyle = 'rgba(239,68,68,0.2)';
+            sfCtx.font = '9px sans-serif';
+            sfCtx.textAlign = 'left';
+            sfCtx.fillText('↑ REPULSIVE', SF_PAD.left + 4, SF_PAD.top + 12);
+            sfCtx.fillStyle = 'rgba(34,197,94,0.2)';
+            sfCtx.fillText('↓ ATTRACTIVE', SF_PAD.left + 4, SF_PAD.top + gh - 4);
+
+            // X-axis label
+            sfCtx.fillStyle = '#475569';
+            sfCtx.font = '10px sans-serif';
+            sfCtx.textAlign = 'center';
+            sfCtx.fillText('Time →', SF_PAD.left + gw / 2, h - 4);
+
+            // axes
+            sfCtx.strokeStyle = '#334155';
+            sfCtx.lineWidth = 1;
+            sfCtx.beginPath();
+            sfCtx.moveTo(SF_PAD.left, SF_PAD.top);
+            sfCtx.lineTo(SF_PAD.left, SF_PAD.top + gh);
+            sfCtx.lineTo(SF_PAD.left + gw, SF_PAD.top + gh);
+            sfCtx.stroke();
+
+            if (sfHistory.length < 2) { sfCtx.restore(); return; }
+
+            const numPairs = sfHistory[0].length;
+            const step = gw / (SF_HISTORY - 1);
+
+            for (let p = 0; p < numPairs; p++) {
+                sfCtx.beginPath();
+                sfCtx.strokeStyle = sfHistory[0][p]?.color || '#888';
+                sfCtx.lineWidth = 2;
+                sfCtx.lineJoin = 'round';
+                sfCtx.lineCap = 'round';
+
+                let started = false;
+                for (let i = 0; i < sfHistory.length; i++) {
+                    if (!sfHistory[i][p]) continue;
+                    const xPos = SF_PAD.left + (SF_HISTORY - sfHistory.length + i) * step;
+                    let yPos = midY - (sfHistory[i][p].force / maxAbs) * (gh / 2);
+                    yPos = Math.max(SF_PAD.top, Math.min(SF_PAD.top + gh, yPos));
+                    if (!started) { sfCtx.moveTo(xPos, yPos); started = true; }
+                    else sfCtx.lineTo(xPos, yPos);
+                }
+                sfCtx.stroke();
+
+                if (sfHistory.length > 0 && sfHistory[sfHistory.length - 1][p]) {
+                    const lastFrame = sfHistory[sfHistory.length - 1][p];
+                    const xEnd = SF_PAD.left + gw;
+                    let yEnd = midY - (lastFrame.force / maxAbs) * (gh / 2);
+                    yEnd = Math.max(SF_PAD.top, Math.min(SF_PAD.top + gh, yEnd));
+
+                    sfCtx.save();
+                    sfCtx.beginPath();
+                    sfCtx.arc(xEnd, yEnd, 4, 0, Math.PI * 2);
+                    sfCtx.fillStyle = lastFrame.color;
+                    sfCtx.shadowColor = lastFrame.color;
+                    sfCtx.shadowBlur = 8;
+                    sfCtx.fill();
+                    sfCtx.restore();
+                }
+            }
+            sfCtx.restore();
+
+            sfFrame++;
+            if (sfFrame % 15 === 0) updateSFLegend();
+        }
+
+        function sfGraphLoop() {
+            if (!sim.paused) sampleStrongForces();
+            drawSFGraph();
+            requestAnimationFrame(sfGraphLoop);
+        }
+        sfGraphLoop();
     </script>
 </body>
 </html>
