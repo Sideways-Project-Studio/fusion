@@ -124,6 +124,68 @@
             background-color: #2563eb;
             border-color: #3b82f6;
         }
+        #energyGraphContainer {
+            width: 100%;
+            max-width: 920px;
+            margin-top: 14px;
+            background: linear-gradient(180deg, rgba(15,23,42,0.95) 0%, rgba(2,6,23,0.98) 100%);
+            border: 1px solid #1e293b;
+            border-radius: 12px;
+            padding: 16px 16px 10px 16px;
+            box-sizing: border-box;
+            box-shadow: 0 8px 32px -8px rgba(0,0,0,0.4);
+        }
+        #energyGraphTitle {
+            font-size: 13px;
+            font-weight: 600;
+            color: #94a3b8;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        #energyGraphTitle::before {
+            content: '';
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #22c55e;
+            box-shadow: 0 0 6px #22c55e;
+            animation: pulse-dot 2s infinite;
+        }
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        #energyCanvas {
+            width: 100%;
+            height: 200px;
+            border-radius: 8px;
+            background: #020617;
+            display: block;
+        }
+        #graphLegend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px 16px;
+            margin-top: 8px;
+            font-size: 11px;
+            color: #64748b;
+        }
+        .graph-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .graph-legend-line {
+            width: 18px;
+            height: 3px;
+            border-radius: 2px;
+            flex-shrink: 0;
+        }
     </style>
 </head>
 <body>
@@ -137,8 +199,8 @@
         </div>
         <div class="control-row">
             <div class="slider-group">
-                <label for="kevSlider">Energy: <span id="kevValue">15</span> keV</label>
-                <input type="range" id="kevSlider" min="1" max="200" value="15" step="1">
+                <label for="kevSlider">Energy: <span id="kevValue">45</span> keV</label>
+                <input type="range" id="kevSlider" min="1" max="200" value="45" step="1">
             </div>
             <div class="slider-group">
                 <label for="timeSlider">Speed: <span id="timeValue">1.0</span>x</label>
@@ -167,12 +229,12 @@
             </div>
         </div>
         <div class="control-row" style="border-top:1px solid #334155; padding-top:8px; margin-top:2px;">
-            <span style="font-size:12px; color:#94a3b8; font-weight:600; letter-spacing:0.5px;">SLOWDOWN</span>
+            <span style="font-size:12px; color:#94a3b8; font-weight:600; letter-spacing:0.5px;">SLOWDOWN OVERRIDES</span>
         </div>
         <div class="control-row">
             <div class="slider-group">
-                <label for="approachMinSlider">Approach Min: <span id="approachMinValue">5</span>%</label>
-                <input type="range" id="approachMinSlider" min="1" max="100" value="5" step="1">
+                <label for="approachMinSlider">Approach Min: <span id="approachMinValue">0.5</span>%</label>
+                <input type="range" id="approachMinSlider" min="0.1" max="10" value="0.5" step="0.1">
             </div>
             <div class="slider-group">
                 <label for="approachRangeSlider">Approach Range: <span id="approachRangeValue">200</span>px</label>
@@ -216,300 +278,166 @@
         </div>
         <div class="legend-item">
             <div class="legend-swatch" style="background:#facc15;"></div>
-            <span>Alpha (&#8308;He)</span>
+            <span>Alpha (⁴He)</span>
         </div>
     </div>
 
+    <div id="energyGraphContainer">
+        <div id="energyGraphTitle">Particle Energy Readout</div>
+        <canvas id="energyCanvas"></canvas>
+        <div id="graphLegend"></div>
+    </div>
+
+    <script src="physics.js"></script>
     <script>
+        const { Nucleon, Photon, rotateCluster, step: physicsStep } = FusionPhysics;
+
         const canvas = document.getElementById('physicsCanvas');
         const ctx = canvas.getContext('2d');
-        
-        let nucleons = [];
-        let photons = [];
-        
-        let deuteriumAssembled = false;
-        let tritiumAssembled = false;
-        let reactionTriggered = false;
-        let fusionOccurred = false;
-        let fusionSlowFactor = 1.0;
-        let timeScale = 1.0;
-        let currentKeV = 15;
 
-        let approachMinDt = 0.05;
-        let approachRange = 200;
-        let fusionMinDt = 0.03;
-        let fusionRecoveryRate = 0.002;
-        
-        const KE = 1000;
-        
-        class Nucleon {
-            constructor(type, x, y, clusterType) {
-                this.type = type;
-                this.x = x;
-                this.y = y;
-                this.vx = 0;
-                this.vy = 0;
-                this.ax = 0; 
-                this.ay = 0; 
-                this.mass = 1.0; 
-                this.charge = (type === 'proton') ? 1.0 : 0.0;
-                this.radius = 12;
-                this.color = (type === 'proton') ? '#ef4444' : '#3b82f6';
-                this.isAlphaComponent = false;
-                this.isEjectedNeutron = false;
-                this.clusterType = clusterType; 
-            }
-        
-            draw(ctx) {
-                ctx.save();
-                if (this.charge > 0) {
-                    let coulombGrad = ctx.createRadialGradient(this.x, this.y, this.radius, this.x, this.y, 120);
-                    coulombGrad.addColorStop(0, 'rgba(239, 68, 68, 0.15)');
-                    coulombGrad.addColorStop(1, 'rgba(239, 68, 68, 0)');
-                    ctx.beginPath(); ctx.arc(this.x, this.y, 120, 0, Math.PI * 2);
-                    ctx.fillStyle = coulombGrad; ctx.fill();
-                }
-                
-                let strongGrad = ctx.createRadialGradient(this.x, this.y, this.radius, this.x, this.y, 18);
-                strongGrad.addColorStop(0, 'rgba(34, 197, 94, 0.4)'); 
-                strongGrad.addColorStop(1, 'rgba(34, 197, 94, 0)');
-                ctx.beginPath(); ctx.arc(this.x, this.y, 18, 0, Math.PI * 2);
-                ctx.fillStyle = strongGrad; ctx.fill();
-                ctx.restore();
-        
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-                if (this.isAlphaComponent) this.color = '#facc15';
-                ctx.fillStyle = this.color;
-                ctx.fill();
-        
-                ctx.fillStyle = this.isAlphaComponent ? '#1a1a1a' : '#ffffff';
-                ctx.font = 'bold 9px sans-serif';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                let label = this.type === 'proton' ? 'P+' : 'N0';
-                if (this.isAlphaComponent) label = '\u03B1';
-                if (this.isEjectedNeutron) label = 'n\u2070';
-                ctx.fillText(label, this.x, this.y);
-            }
-        }
-        
-        class Photon {
-            constructor(x, y, angle) {
-                this.x = x; this.y = y; this.speed = 12;
-                this.vx = Math.cos(angle) * this.speed;
-                this.vy = Math.sin(angle) * this.speed;
-                this.life = 1.0; this.decay = 0.02;
-            }
-            update() {
-                this.x += this.vx * timeScale;
-                this.y += this.vy * timeScale;
-                this.life -= this.decay * timeScale;
-            }
-            draw(ctx) {
-                ctx.save(); ctx.globalAlpha = this.life;
-                ctx.strokeStyle = '#a855f7'; ctx.lineWidth = 2;
-                ctx.beginPath(); ctx.moveTo(this.x, this.y);
-                for (let i = 0; i < 6; i++) {
-                    let evalX = this.x - (this.vx * i * 0.2);
-                    let evalY = this.y - (this.vy * i * 0.2);
-                    let waveOffset = Math.sin(Date.now() * 0.05 + i) * 4;
-                    let mag = Math.sqrt((-this.vy)**2 + this.vx**2) || 1;
-                    ctx.lineTo(evalX + (-this.vy / mag) * waveOffset, evalY + (this.vx / mag) * waveOffset);
-                }
-                ctx.stroke(); ctx.restore();
-            }
-        }
-        
+        const sim = {
+            nucleons: [],
+            photons: [],
+            deuteriumAssembled: false,
+            tritiumAssembled: false,
+            reactionTriggered: false,
+            fusionOccurred: false,
+            fusionSlowFactor: 1.0,
+            timeScale: 1.0,
+            currentKeV: 45,
+            approachMinDt: 0.005,
+            approachRange: 200,
+            fusionMinDt: 0.03,
+            fusionRecoveryRate: 0.002,
+            impactOffset: 0.2,
+            deuAngle: 0,
+            triAngle: 0
+        };
+
+        // --- Controls ---
+
         document.getElementById('kevSlider').addEventListener('input', (e) => {
-            currentKeV = parseFloat(e.target.value);
-            document.getElementById('kevValue').innerText = currentKeV;
+            sim.currentKeV = parseFloat(e.target.value);
+            document.getElementById('kevValue').innerText = sim.currentKeV;
         });
-        
+
         const setTimeScale = (val) => {
-            timeScale = val; document.getElementById('timeSlider').value = val;
+            sim.timeScale = val;
+            document.getElementById('timeSlider').value = val;
             document.getElementById('timeValue').innerText = val.toFixed(1);
-            document.querySelectorAll('.speed-btn').forEach(b => b.classList.toggle('active', parseFloat(b.dataset.speed) === val));
+            document.querySelectorAll('.speed-btn').forEach(b =>
+                b.classList.toggle('active', parseFloat(b.dataset.speed) === val)
+            );
         };
         document.getElementById('timeSlider').addEventListener('input', (e) => setTimeScale(parseFloat(e.target.value)));
         document.querySelectorAll('.speed-btn').forEach(b => b.addEventListener('click', () => setTimeScale(parseFloat(b.dataset.speed))));
         document.getElementById('btnReset').addEventListener('click', resetEngineEnvironment);
 
         document.getElementById('approachMinSlider').addEventListener('input', (e) => {
-            approachMinDt = parseFloat(e.target.value) / 100;
+            sim.approachMinDt = parseFloat(e.target.value) / 100;
             document.getElementById('approachMinValue').innerText = e.target.value;
         });
         document.getElementById('approachRangeSlider').addEventListener('input', (e) => {
-            approachRange = parseFloat(e.target.value);
+            sim.approachRange = parseFloat(e.target.value);
             document.getElementById('approachRangeValue').innerText = e.target.value;
         });
         document.getElementById('fusionMinSlider').addEventListener('input', (e) => {
-            fusionMinDt = parseFloat(e.target.value) / 100;
+            sim.fusionMinDt = parseFloat(e.target.value) / 100;
             document.getElementById('fusionMinValue').innerText = e.target.value;
         });
         document.getElementById('fusionRecoverySlider').addEventListener('input', (e) => {
-            fusionRecoveryRate = parseFloat(e.target.value) / 1000;
+            sim.fusionRecoveryRate = parseFloat(e.target.value) / 1000;
             document.getElementById('fusionRecoveryValue').innerText = e.target.value;
         });
 
-        let deuAngle = 0; let triAngle = 0;
-        
         document.getElementById('deuAngleSlider').addEventListener('input', (e) => {
-            deuAngle = parseFloat(e.target.value) * Math.PI / 180;
+            sim.deuAngle = parseFloat(e.target.value) * Math.PI / 180;
             document.getElementById('deuAngleValue').innerText = e.target.value;
-            if (deuteriumAssembled && !reactionTriggered) rotateCluster('D', 180, 275, deuAngle);
-        });
-        
-        document.getElementById('triAngleSlider').addEventListener('input', (e) => {
-            triAngle = parseFloat(e.target.value) * Math.PI / 180;
-            document.getElementById('triAngleValue').innerText = e.target.value;
-            if (tritiumAssembled && !reactionTriggered) rotateCluster('T', 720, 275, triAngle);
-        });
-        
-        document.getElementById('btnDeuterium').addEventListener('click', () => {
-            if (deuteriumAssembled) return;
-            let cx = 180, cy = 275;
-            let r0 = 16.0; // FIXED: Spawns the components much closer together
-            
-            nucleons.push(new Nucleon('proton', cx - r0, cy, 'D'), new Nucleon('neutron', cx + r0, cy, 'D'));
-            deuteriumAssembled = true; 
-            rotateCluster('D', cx, cy, deuAngle);
-            evalLaunchVerification();
-        });
-        
-        document.getElementById('btnTritium').addEventListener('click', () => {
-            if (tritiumAssembled) return;
-            let cx = 720, cy = 275;
-            let r_equil = 28.5; 
-            let h = r_equil * (Math.sqrt(3) / 2);
-            
-            nucleons.push(
-                new Nucleon('proton', cx, cy - (2/3)*h, 'T'),
-                new Nucleon('neutron', cx - r_equil/2, cy + (1/3)*h, 'T'),
-                new Nucleon('neutron', cx + r_equil/2, cy + (1/3)*h, 'T')
-            );
-            tritiumAssembled = true; 
-            rotateCluster('T', cx, cy, triAngle);
-            evalLaunchVerification();
-        });
-        
-        function rotateCluster(clusterType, cx, cy, rad) {
-            let filtered = nucleons.filter(n => n.clusterType === clusterType);
-            if (clusterType === 'D' && filtered.length === 2) {
-                let r0 = 16.0; // FIXED: Synced layout parameter for rotating closer structure
-                filtered[0].x = cx - Math.cos(rad) * r0; filtered[0].y = cy - Math.sin(rad) * r0;
-                filtered[1].x = cx + Math.cos(rad) * r0; filtered[1].y = cy + Math.sin(rad) * r0;
-            } else if (clusterType === 'T' && filtered.length === 3) {
-                let r_equil = 28.5, h = r_equil * (Math.sqrt(3) / 2); 
-                let points = [{x: 0, y: -(2/3)*h}, {x: -r_equil/2, y: (1/3)*h}, {x: r_equil/2, y: (1/3)*h}];
-                filtered.forEach((n, idx) => {
-                    let pt = points[idx];
-                    n.x = cx + (pt.x * Math.cos(rad) - pt.y * Math.sin(rad));
-                    n.y = cy + (pt.x * Math.sin(rad) + pt.y * Math.cos(rad));
-                    n.vx = 0; n.vy = 0; n.ax = 0; n.ay = 0;
-                });
+            if (sim.deuteriumAssembled && !sim.reactionTriggered) {
+                rotateCluster('D', 180, 275, sim.deuAngle, sim.nucleons);
             }
-        }
-        
-        let impactOffset = 0.2;
+        });
+
+        document.getElementById('triAngleSlider').addEventListener('input', (e) => {
+            sim.triAngle = parseFloat(e.target.value) * Math.PI / 180;
+            document.getElementById('triAngleValue').innerText = e.target.value;
+            if (sim.tritiumAssembled && !sim.reactionTriggered) {
+                rotateCluster('T', 720, 275, sim.triAngle, sim.nucleons);
+            }
+        });
+
         document.getElementById('impactOffsetSlider').addEventListener('input', (e) => {
-            impactOffset = parseFloat(e.target.value);
-            document.getElementById('impactOffsetValue').innerText = impactOffset.toFixed(2);
+            sim.impactOffset = parseFloat(e.target.value);
+            document.getElementById('impactOffsetValue').innerText = sim.impactOffset.toFixed(2);
+        });
+
+        // --- Spawn & Launch ---
+
+        document.getElementById('btnDeuterium').addEventListener('click', () => {
+            if (sim.deuteriumAssembled) return;
+            let cx = 180, cy = 275, r0 = 16.0;
+            sim.nucleons.push(new Nucleon('proton', cx - r0, cy, 'D'), new Nucleon('neutron', cx + r0, cy, 'D'));
+            sim.deuteriumAssembled = true;
+            rotateCluster('D', cx, cy, sim.deuAngle, sim.nucleons);
+            evalLaunchReady();
+        });
+
+        document.getElementById('btnTritium').addEventListener('click', () => {
+            if (sim.tritiumAssembled) return;
+            let cx = 720, cy = 275;
+            let r_equil = 28.5;
+            let h = r_equil * (Math.sqrt(3) / 2);
+            sim.nucleons.push(
+                new Nucleon('proton', cx, cy - (2 / 3) * h, 'T'),
+                new Nucleon('neutron', cx - r_equil / 2, cy + (1 / 3) * h, 'T'),
+                new Nucleon('neutron', cx + r_equil / 2, cy + (1 / 3) * h, 'T')
+            );
+            sim.tritiumAssembled = true;
+            rotateCluster('T', cx, cy, sim.triAngle, sim.nucleons);
+            evalLaunchReady();
         });
 
         document.getElementById('btnLaunch').addEventListener('click', () => {
-            if (!deuteriumAssembled || !tritiumAssembled || reactionTriggered) return;
-            let speedFactor = 0.38;
-            let computedVelocity = Math.sqrt(currentKeV) * speedFactor;
-            nucleons.forEach(n => {
+            if (!sim.deuteriumAssembled || !sim.tritiumAssembled || sim.reactionTriggered) return;
+            let computedVelocity = Math.sqrt(sim.currentKeV) * 0.38;
+            sim.nucleons.forEach(n => {
                 n.vx = (n.x < canvas.width / 2) ? computedVelocity : -computedVelocity;
-                n.vy = (Math.random() - 0.5) * impactOffset;
+                n.vy = (Math.random() - 0.5) * sim.impactOffset;
             });
-            reactionTriggered = true;
+            sim.reactionTriggered = true;
         });
-        
-        function evalLaunchVerification() {
-            if (deuteriumAssembled && tritiumAssembled) document.getElementById('btnLaunch').disabled = false;
+
+        function evalLaunchReady() {
+            if (sim.deuteriumAssembled && sim.tritiumAssembled) {
+                document.getElementById('btnLaunch').disabled = false;
+            }
         }
-        
+
         function resetEngineEnvironment() {
-            nucleons = []; photons = [];
-            deuteriumAssembled = false; tritiumAssembled = false; reactionTriggered = false;
-            fusionOccurred = false; fusionSlowFactor = 1.0;
+            sim.nucleons = [];
+            sim.photons = [];
+            sim.deuteriumAssembled = false;
+            sim.tritiumAssembled = false;
+            sim.reactionTriggered = false;
+            sim.fusionOccurred = false;
+            sim.fusionSlowFactor = 1.0;
             document.getElementById('btnLaunch').disabled = true;
+            energyHistory = [];
+            document.getElementById('graphLegend').innerHTML = '';
         }
-        
+
+        // --- Main Render Loop ---
+
         function mainSimulationEngine() {
             ctx.fillStyle = 'rgba(2, 6, 23, 0.4)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-            let minDist = Infinity;
-            if (reactionTriggered && nucleons.length >= 2) {
-                for (let i = 0; i < nucleons.length; i++) {
-                    for (let j = i + 1; j < nucleons.length; j++) {
-                        if (nucleons[i].clusterType === nucleons[j].clusterType) continue;
-                        let dx = nucleons[i].x - nucleons[j].x;
-                        let dy = nucleons[i].y - nucleons[j].y;
-                        let d = Math.sqrt(dx * dx + dy * dy);
-                        if (d < minDist) minDist = d;
-                    }
-                }
-            }
 
-            const SLOWDOWN_END = 30;
-            let adaptiveFactor = 1.0;
-            if (reactionTriggered && minDist < approachRange) {
-                let t = Math.max(0, (minDist - SLOWDOWN_END) / (approachRange - SLOWDOWN_END));
-                adaptiveFactor = approachMinDt + (1.0 - approachMinDt) * (t * t);
-            }
+            const { dt, adaptiveFactor, minDist } = physicsStep(sim, canvas.width, canvas.height);
 
-            if (fusionOccurred) {
-                fusionSlowFactor = Math.min(fusionSlowFactor + fusionRecoveryRate, 1.0);
-            }
+            sim.nucleons.forEach(n => n.draw(ctx));
 
-            let dt = timeScale * adaptiveFactor * fusionSlowFactor;
-        
-            nucleons.forEach(n => {
-                n.x += n.vx * dt + 0.5 * n.ax * dt * dt;
-                n.y += n.vy * dt + 0.5 * n.ay * dt * dt;
-                n.old_ax = n.ax;
-                n.old_ay = n.ay;
-                n.ax = 0; 
-                n.ay = 0;
-            });
-        
-            for (let i = 0; i < nucleons.length; i++) {
-                for (let j = i + 1; j < nucleons.length; j++) {
-                    computeInterNucleonForces(nucleons[i], nucleons[j]);
-                }
-            }
-        
-             nucleons.forEach(n => {
-                if (!reactionTriggered) {
-                    let speedSq = n.vx * n.vx + n.vy * n.vy;
-                    if (speedSq > 5) {
-                        n.vx *= 0.50; 
-                        n.vy *= 0.50;
-                    } else {
-                        n.vx *= 0.82; 
-                        n.vy *= 0.82;
-                    }
-                }
-                n.vx += 0.5 * (n.old_ax + n.ax) * dt;
-                n.vy += 0.5 * (n.old_ay + n.ay) * dt;
-        
-                let pad = n.radius;
-                if (n.x < pad) { n.x = pad; n.vx *=-0.5; }
-                if (n.x > canvas.width - pad) { n.x = canvas.width - pad; n.vx *= -0.5; }
-                if (n.y < pad) { n.y = pad; n.vy *= -0.5; }
-                if (n.y > canvas.height - pad) { n.y = canvas.height - pad; n.vy *= -0.5; }
-            });
-        
-            evaluateFusionState();
-        
-            nucleons.forEach(n => n.draw(ctx));
-            photons = photons.filter(p => p.life > 0);
-            photons.forEach(p => { p.update(); p.draw(ctx); });
+            sim.photons = sim.photons.filter(p => p.life > 0);
+            sim.photons.forEach(p => { p.update(sim.timeScale); p.draw(ctx); });
 
             ctx.save();
             ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
@@ -526,83 +454,175 @@
 
             requestAnimationFrame(mainSimulationEngine);
         }
-        
-        function computeInterNucleonForces(n1, n2) {
-            let dx = n2.x - n1.x;
-            let dy = n2.y - n1.y;
-            let r = Math.sqrt(dx * dx + dy * dy);
-            if (r < 0.1) return;
-        
-            let f_coulomb = (KE * n1.charge * n2.charge) / (r * r);
-            
-            const MU = 0.15;        
-            const C_ATTRACT = 850;  
-            let expTerm = Math.exp(-MU * r);
-            let f_strong_attract = C_ATTRACT * (expTerm / r) * (MU + (1 / r));
-            
-            // FIXED: Shifted Pauli distribution floor down to 14.0 to yield close-proximity stability
-            const QUANTUM_RADIUS = 14.0; 
-            const STEEPSET_FACTOR = 0.8; 
-            const C_PAULI = 120000;      
-            
-            let f_pauli_exclusion = C_PAULI / (1.0 + Math.exp((r - QUANTUM_RADIUS) / STEEPSET_FACTOR));
-            
-            let f_net = f_coulomb + f_pauli_exclusion - f_strong_attract;
-        
-            const FORCE_LIMIT = 800;
-            if (f_net > FORCE_LIMIT) f_net = FORCE_LIMIT;
-            if (f_net < -FORCE_LIMIT) f_net = -FORCE_LIMIT;
-        
-            let fx = (dx / r) * f_net;
-            let fy = (dy / r) * f_net;
-        
-            n1.ax -= fx / n1.mass;
-            n1.ay -= fy / n1.mass;
-            n2.ax += fx / n2.mass;
-            n2.ay += fy / n2.mass;
-        }
-        
-        function evaluateFusionState() {
-    if (nucleons.length !== 5) return;
 
-    let avgX = nucleons.reduce((s, n) => s + n.x, 0) / 5;
-    let avgY = nucleons.reduce((s, n) => s + n.y, 0) / 5;
-    
-    // Increased detection spread from 32 to 55 to capture high-speed frames
-    let maxSpread = Math.max(...nucleons.map(n => Math.sqrt((n.x - avgX)**2 + (n.y - avgY)**2)));
-
-    if (maxSpread < 55 && !nucleons.some(n => n.isAlphaComponent)) {
-        let neutrons = nucleons.filter(n => n.type === 'neutron');
-        neutrons.sort((a,b) => ((b.x-avgX)**2 + (b.y-avgY)**2) - ((a.x-avgX)**2 + (a.y-avgY)**2));
-        let escapeNeutron = neutrons[0];
-
-        nucleons.forEach(n => {
-            let angle = Math.atan2(n.y - avgY, n.x - avgX);
-            if (n === escapeNeutron) {
-                n.isEjectedNeutron = true;
-                // High velocity neutron escape
-                n.vx = Math.cos(angle) * 15.0;
-                n.vy = Math.sin(angle) * 15.0;
-            } else {
-                n.isAlphaComponent = true;
-                // Form the Helium core
-                n.vx = -Math.cos(angle) * 2.0 + (n.x < avgX ? -1.0 : 1.0);
-                n.vy = Math.sin(angle) * 1.0;
-            }
-        });
-
-        // Trigger the visual photon explosion ring
-        fusionOccurred = true;
-        fusionSlowFactor = fusionMinDt;
-
-        for (let i = 0; i < 16; i++) {
-            photons.push(new Photon(avgX, avgY, (i / 16) * Math.PI * 2));
-        }
-    }
-}
-        
         mainSimulationEngine();
-        </script>
-</script>
+
+        // --- Energy Graph ---
+
+        const eCanvas = document.getElementById('energyCanvas');
+        const eCtx = eCanvas.getContext('2d');
+        const GRAPH_HISTORY = 300;
+        const GRAPH_PAD = { top: 18, right: 14, bottom: 28, left: 56 };
+        let energyHistory = [];
+        let graphFrame = 0;
+
+        const PARTICLE_COLORS = [
+            '#f87171', '#60a5fa', '#34d399', '#fbbf24', '#a78bfa',
+            '#fb923c', '#38bdf8', '#4ade80', '#facc15', '#c084fc'
+        ];
+
+        function resizeEnergyCanvas() {
+            const rect = eCanvas.getBoundingClientRect();
+            eCanvas.width = rect.width * devicePixelRatio;
+            eCanvas.height = rect.height * devicePixelRatio;
+            eCtx.scale(devicePixelRatio, devicePixelRatio);
+        }
+        resizeEnergyCanvas();
+        window.addEventListener('resize', resizeEnergyCanvas);
+
+        function getParticleLabel(n, idx) {
+            if (n.isEjectedNeutron) return 'n (ejected)';
+            if (n.isAlphaComponent) return (n.type === 'proton' ? 'P+' : 'N0') + ' (α)';
+            let prefix = n.clusterType === 'D' ? 'D' : n.clusterType === 'T' ? 'T' : '';
+            let symbol = n.type === 'proton' ? 'P+' : 'N0';
+            return prefix ? `${prefix}-${symbol}` : `${symbol} #${idx + 1}`;
+        }
+
+        function sampleEnergies() {
+            if (sim.nucleons.length === 0) return;
+            let frame = [];
+            sim.nucleons.forEach((n, i) => {
+                frame.push({
+                    ke: n.kineticEnergy(),
+                    label: getParticleLabel(n, i),
+                    color: PARTICLE_COLORS[i % PARTICLE_COLORS.length]
+                });
+            });
+            energyHistory.push(frame);
+            if (energyHistory.length > GRAPH_HISTORY) energyHistory.shift();
+        }
+
+        function updateGraphLegend() {
+            const container = document.getElementById('graphLegend');
+            if (energyHistory.length === 0) { container.innerHTML = ''; return; }
+            let last = energyHistory[energyHistory.length - 1];
+            let html = '';
+            last.forEach(p => {
+                html += `<div class="graph-legend-item">
+                    <div class="graph-legend-line" style="background:${p.color};"></div>
+                    <span>${p.label}: <strong style="color:#e2e8f0">${p.ke.toFixed(1)}</strong> keV</span>
+                </div>`;
+            });
+            container.innerHTML = html;
+        }
+
+        function drawEnergyGraph() {
+            const w = eCanvas.getBoundingClientRect().width;
+            const h = eCanvas.getBoundingClientRect().height;
+
+            eCtx.clearRect(0, 0, w, h);
+
+            const gw = w - GRAPH_PAD.left - GRAPH_PAD.right;
+            const gh = h - GRAPH_PAD.top - GRAPH_PAD.bottom;
+
+            let maxKE = 1;
+            energyHistory.forEach(frame => {
+                frame.forEach(p => { if (p.ke > maxKE) maxKE = p.ke; });
+            });
+            maxKE = Math.ceil(maxKE / 10) * 10 || 10;
+
+            eCtx.save();
+            eCtx.strokeStyle = 'rgba(51,65,85,0.35)';
+            eCtx.lineWidth = 0.5;
+            const yTicks = 5;
+            for (let i = 0; i <= yTicks; i++) {
+                let yy = GRAPH_PAD.top + (gh / yTicks) * i;
+                eCtx.beginPath();
+                eCtx.moveTo(GRAPH_PAD.left, yy);
+                eCtx.lineTo(GRAPH_PAD.left + gw, yy);
+                eCtx.stroke();
+
+                eCtx.fillStyle = '#475569';
+                eCtx.font = '10px monospace';
+                eCtx.textAlign = 'right';
+                eCtx.textBaseline = 'middle';
+                let val = maxKE - (maxKE / yTicks) * i;
+                eCtx.fillText(val.toFixed(0), GRAPH_PAD.left - 8, yy);
+            }
+
+            eCtx.save();
+            eCtx.translate(14, GRAPH_PAD.top + gh / 2);
+            eCtx.rotate(-Math.PI / 2);
+            eCtx.fillStyle = '#475569';
+            eCtx.font = '10px sans-serif';
+            eCtx.textAlign = 'center';
+            eCtx.fillText('KE (keV)', 0, 0);
+            eCtx.restore();
+
+            eCtx.fillStyle = '#475569';
+            eCtx.font = '10px sans-serif';
+            eCtx.textAlign = 'center';
+            eCtx.fillText('Time →', GRAPH_PAD.left + gw / 2, h - 4);
+
+            eCtx.strokeStyle = '#334155';
+            eCtx.lineWidth = 1;
+            eCtx.beginPath();
+            eCtx.moveTo(GRAPH_PAD.left, GRAPH_PAD.top);
+            eCtx.lineTo(GRAPH_PAD.left, GRAPH_PAD.top + gh);
+            eCtx.lineTo(GRAPH_PAD.left + gw, GRAPH_PAD.top + gh);
+            eCtx.stroke();
+
+            if (energyHistory.length < 2) { eCtx.restore(); return; }
+
+            let numParticles = energyHistory[0].length;
+            let step = gw / (GRAPH_HISTORY - 1);
+
+            for (let p = 0; p < numParticles; p++) {
+                eCtx.beginPath();
+                eCtx.strokeStyle = energyHistory[0][p]?.color || '#888';
+                eCtx.lineWidth = 2;
+                eCtx.lineJoin = 'round';
+                eCtx.lineCap = 'round';
+
+                let started = false;
+                for (let i = 0; i < energyHistory.length; i++) {
+                    if (!energyHistory[i][p]) continue;
+                    let xPos = GRAPH_PAD.left + (GRAPH_HISTORY - energyHistory.length + i) * step;
+                    let yPos = GRAPH_PAD.top + gh - (energyHistory[i][p].ke / maxKE) * gh;
+                    yPos = Math.max(GRAPH_PAD.top, Math.min(GRAPH_PAD.top + gh, yPos));
+                    if (!started) { eCtx.moveTo(xPos, yPos); started = true; }
+                    else eCtx.lineTo(xPos, yPos);
+                }
+                eCtx.stroke();
+
+                if (energyHistory.length > 0 && energyHistory[energyHistory.length - 1][p]) {
+                    let lastFrame = energyHistory[energyHistory.length - 1][p];
+                    let xEnd = GRAPH_PAD.left + gw;
+                    let yEnd = GRAPH_PAD.top + gh - (lastFrame.ke / maxKE) * gh;
+                    yEnd = Math.max(GRAPH_PAD.top, Math.min(GRAPH_PAD.top + gh, yEnd));
+
+                    eCtx.save();
+                    eCtx.beginPath();
+                    eCtx.arc(xEnd, yEnd, 4, 0, Math.PI * 2);
+                    eCtx.fillStyle = lastFrame.color;
+                    eCtx.shadowColor = lastFrame.color;
+                    eCtx.shadowBlur = 8;
+                    eCtx.fill();
+                    eCtx.restore();
+                }
+            }
+            eCtx.restore();
+
+            graphFrame++;
+            if (graphFrame % 15 === 0) updateGraphLegend();
+        }
+
+        function energyGraphLoop() {
+            sampleEnergies();
+            drawEnergyGraph();
+            requestAnimationFrame(energyGraphLoop);
+        }
+        energyGraphLoop();
+    </script>
 </body>
 </html>
