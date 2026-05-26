@@ -1,0 +1,31 @@
+{
+  "proton": {
+    "quark_composition": "uud",
+    "quarks_up": 2,
+    "quarks_down": 1,
+    "charge_e": 1,
+    "charge_C": 1.602e-19,
+    "mass_MeV_c2": 938.272,
+    "mass_kg": 1.6726e-27,
+    "spin": 0.5,
+    "charge_radius_fm": 0.841,
+    "magnetic_moment_nuclear_magnetons": 2.793,
+    "lifetime_years_lower_bound": 1.0e+34,
+    "stable": true
+  },
+  "neutron": {
+    "quark_composition": "udd",
+    "quarks_up": 1,
+    "quarks_down": 2,
+    "charge_e": 0,
+    "charge_C": 0,
+    "mass_MeV_c2": 939.565,
+    "mass_kg": 1.6749e-27,
+    "spin": 0.5,
+    "magnetic_moment_nuclear_magnetons": -1.913,
+    "lifetime_free_seconds": 878.4,
+    "lifetime_free_minutes": 14.6,
+    "decay_product": "proton",
+    "stable_when_bound": true
+  }
+}

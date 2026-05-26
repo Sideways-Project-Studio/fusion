@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subatomic D-T Fusion Engine Simulation</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 10px;
+            background-color: #0b0f19;
+            color: #f3f4f6;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+        #controls {
+            margin-bottom: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            z-index: 10;
+            width: 100%;
+            max-width: 920px;
+        }
+        .control-row {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 8px;
+        }
+        button {
+            background-color: #1f2937;
+            border: 1px solid #374151;
+            color: #f3f4f6;
+            padding: 8px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 13px;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        button:hover {
+            background-color: #374151;
+            border-color: #4b5563;
+        }
+        #btnLaunch {
+            background-color: #2563eb;
+            border-color: #3b82f6;
+        }
+        #btnLaunch:hover {
+            background-color: #1d4ed8;
+        }
+        canvas {
+            background-color: #020617;
+            border: 2px solid #1e293b;
+            border-radius: 12px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            max-width: 100%;
+            height: auto;
+        }
+        #legend {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 12px 18px;
+            margin-top: 10px;
+            padding: 8px 16px;
+            background-color: rgba(15, 23, 42, 0.8);
+            border: 1px solid #1e293b;
+            border-radius: 8px;
+            font-size: 13px;
+            z-index: 10;
+            max-width: 920px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .legend-swatch {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .legend-field {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            opacity: 0.6;
+        }
+        .slider-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .slider-group label {
+            white-space: nowrap;
+            font-size: 13px;
+        }
+        .slider-group input[type="range"] {
+            width: 120px;
+        }
+        #speedControls {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .speed-btn {
+            padding: 4px 8px;
+            font-size: 11px;
+            min-width: 36px;
+        }
+        .speed-btn.active {
+            background-color: #2563eb;
+            border-color: #3b82f6;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <div class="control-row">
+            <button id="btnDeuterium">Spawn Deuterium</button>
+            <button id="btnTritium">Spawn Tritium</button>
+            <button id="btnLaunch" disabled>Smash Ions</button>
+            <button id="btnReset">Reset</button>
+        </div>
+        <div class="control-row">
+            <div class="slider-group">
+                <label for="kevSlider">Energy: <span id="kevValue">15</span> keV</label>
+                <input type="range" id="kevSlider" min="1" max="50" value="15" step="1">
+            </div>
+            <div class="slider-group">
+                <label for="timeSlider">Speed: <span id="timeValue">1.0</span>x</label>
+                <input type="range" id="timeSlider" min="0.1" max="4.0" value="1.0" step="0.1">
+            </div>
+            <div id="speedControls">
+                <button class="speed-btn" data-speed="0.25">0.25x</button>
+                <button class="speed-btn" data-speed="0.5">0.5x</button>
+                <button class="speed-btn active" data-speed="1">1x</button>
+                <button class="speed-btn" data-speed="2">2x</button>
+                <button class="speed-btn" data-speed="4">4x</button>
+            </div>
+        </div>
+        <div class="control-row">
+            <div class="slider-group">
+                <label for="deuAngleSlider">D Angle: <span id="deuAngleValue">0</span>&deg;</label>
+                <input type="range" id="deuAngleSlider" min="0" max="359" value="0" step="1">
+            </div>
+            <div class="slider-group">
+                <label for="triAngleSlider">T Angle: <span id="triAngleValue">0</span>&deg;</label>
+                <input type="range" id="triAngleSlider" min="0" max="359" value="0" step="1">
+            </div>
+        </div>
+    </div>
+
+    <canvas id="physicsCanvas" width="900" height="550"></canvas>
+
+    <div id="legend">
+        <div class="legend-item">
+            <div class="legend-swatch" style="background:#ef4444;"></div>
+            <span>Proton (P+)</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-swatch" style="background:#3b82f6;"></div>
+            <span>Neutron (N0)</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-field" style="background:#22c55e;"></div>
+            <span>Strong Force Field</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-field" style="background:#ef4444;"></div>
+            <span>Coulomb Field</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-swatch" style="background:#a855f7;"></div>
+            <span>Gamma Photon</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-swatch" style="background:#e11d48;"></div>
+            <span>Alpha (⁴He)</span>
+        </div>
+    </div>
+
+<script>
+const canvas = document.getElementById('physicsCanvas');
+const ctx = canvas.getContext('2d');
+
+// Simulation Storage Arrays
+let nucleons = [];
+let photons = [];
+
+// App State Management Flags
+let deuteriumAssembled = false;
+let tritiumAssembled = false;
+let reactionTriggered = false;
+
+class Nucleon {
+    constructor(type, x, y, id) {
+        this.id = id;
+        this.type = type;
+        this.x = x;
+        this.y = y;
+        this.vx = 0;
+        this.vy = 0;
+        this.mass = 1.0;
+        this.charge = (type === 'proton') ? 1.0 : 0.0;
+        this.radius = 12;
+        this.damping = 0.96;
+        this.color = (type === 'proton') ? '#ef4444' : '#3b82f6';
+        this.isPartOfAlpha = false;
+        this.isEjectedNeutron = false;
+    }
+
+    draw(ctx) {
+        ctx.save();
+
+        if (this.isPartOfAlpha) {
+            this.color = '#e11d48';
+            let alphaGrad = ctx.createRadialGradient(this.x, this.y, this.radius, this.x, this.y, 35);
+            alphaGrad.addColorStop(0, 'rgba(225, 29, 72, 0.4)');
+            alphaGrad.addColorStop(1, 'rgba(225, 29, 72, 0)');
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 35, 0, Math.PI * 2);
+            ctx.fillStyle = alphaGrad;
+            ctx.fill();
+        } else {
+            if (this.charge > 0) {
+                let coulombGrad = ctx.createRadialGradient(this.x, this.y, this.radius, this.x, this.y, 80);
+                coulombGrad.addColorStop(0, 'rgba(239, 68, 68, 0.2)');
+                coulombGrad.addColorStop(1, 'rgba(239, 68, 68, 0)');
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 80, 0, Math.PI * 2);
+                ctx.fillStyle = coulombGrad;
+                ctx.fill();
+            }
+            let strongGrad = ctx.createRadialGradient(this.x, this.y, this.radius, this.x, this.y, 42);
+            strongGrad.addColorStop(0, 'rgba(34, 197, 94, 0.35)');
+            strongGrad.addColorStop(1, 'rgba(34, 197, 94, 0)');
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 42, 0, Math.PI * 2);
+            ctx.fillStyle = strongGrad;
+            ctx.fill();
+        }
+
+        ctx.restore();
+
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        let label = this.type === 'proton' ? 'P+' : 'N0';
+        if (this.isPartOfAlpha) label = '\u03B1';
+        if (this.isEjectedNeutron) label = 'n\u2070';
+        ctx.fillText(label, this.x, this.y);
+    }
+}
+
+class Photon {
+    constructor(x, y, angle) {
+        this.x = x;
+        this.y = y;
+        this.speed = 14;
+        this.vx = Math.cos(angle) * this.speed;
+        this.vy = Math.sin(angle) * this.speed;
+        this.life = 1.0;
+        this.decay = 0.025;
+    }
+
+    update() {
+        this.x += this.vx * timeScale;
+        this.y += this.vy * timeScale;
+        this.life -= this.decay * timeScale;
+    }
+
+    draw(ctx) {
+        ctx.save();
+        ctx.globalAlpha = this.life;
+        ctx.strokeStyle = '#a855f7'; // Gamma Purple Spectrum
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        
+        // Generate continuous high frequency sinusoidal wave trail
+        ctx.moveTo(this.x, this.y);
+        for (let i = 0; i < 6; i++) {
+            let evalX = this.x - (this.vx * i * 0.15);
+            let evalY = this.y - (this.vy * i * 0.15);
+            let perpX = -this.vy;
+            let perpY = this.vx;
+            let offsetSpeed = Date.now() * 0.06 + i;
+            let waveOffset = Math.sin(offsetSpeed) * 5;
+            
+            // Normalize angular perpendicular adjustments
+            let magnitude = Math.sqrt(perpX*perpX + perpY*perpY);
+            ctx.lineTo(evalX + (perpX / magnitude) * waveOffset, evalY + (perpY / magnitude) * waveOffset);
+        }
+        ctx.stroke();
+        ctx.restore();
+    }
+}
+
+// -------------------------------------------------------------
+// Structural Creation Controls
+// -------------------------------------------------------------
+
+let deuAngleDeg = 0;
+let triAngleDeg = 0;
+
+document.getElementById('deuAngleSlider').addEventListener('input', (e) => {
+    deuAngleDeg = parseFloat(e.target.value);
+    document.getElementById('deuAngleValue').innerText = deuAngleDeg;
+});
+
+document.getElementById('triAngleSlider').addEventListener('input', (e) => {
+    triAngleDeg = parseFloat(e.target.value);
+    document.getElementById('triAngleValue').innerText = triAngleDeg;
+});
+
+document.getElementById('btnDeuterium').addEventListener('click', () => {
+    if (deuteriumAssembled) return;
+    let cx = 200, cy = 260, spacing = 17.5;
+    let rad = deuAngleDeg * Math.PI / 180;
+    nucleons.push(new Nucleon('proton',  cx + Math.cos(rad) * -spacing, cy + Math.sin(rad) * -spacing, 0));
+    nucleons.push(new Nucleon('neutron', cx + Math.cos(rad) *  spacing, cy + Math.sin(rad) *  spacing, 1));
+    deuteriumAssembled = true;
+    evalLaunchVerification();
+});
+
+document.getElementById('btnTritium').addEventListener('click', () => {
+    if (tritiumAssembled) return;
+    let cx = 700, cy = 260, spacing = 20;
+    let rad = triAngleDeg * Math.PI / 180;
+    let a0 = rad;
+    let a1 = rad + (2 * Math.PI / 3);
+    let a2 = rad + (4 * Math.PI / 3);
+    nucleons.push(new Nucleon('proton',  cx + Math.cos(a0) * spacing, cy + Math.sin(a0) * spacing, 2));
+    nucleons.push(new Nucleon('neutron', cx + Math.cos(a1) * spacing, cy + Math.sin(a1) * spacing, 3));
+    nucleons.push(new Nucleon('neutron', cx + Math.cos(a2) * spacing, cy + Math.sin(a2) * spacing, 4));
+    tritiumAssembled = true;
+    evalLaunchVerification();
+});
+
+let currentKeV = 15;
+let timeScale = 1.0;
+
+document.getElementById('kevSlider').addEventListener('input', (e) => {
+    currentKeV = parseFloat(e.target.value);
+    document.getElementById('kevValue').innerText = currentKeV;
+});
+
+function setTimeScale(val) {
+    timeScale = val;
+    document.getElementById('timeSlider').value = val;
+    document.getElementById('timeValue').innerText = val.toFixed(1);
+    document.querySelectorAll('.speed-btn').forEach(btn => {
+        btn.classList.toggle('active', parseFloat(btn.dataset.speed) === val);
+    });
+}
+
+document.getElementById('timeSlider').addEventListener('input', (e) => {
+    timeScale = parseFloat(e.target.value);
+    document.getElementById('timeValue').innerText = timeScale.toFixed(1);
+    document.querySelectorAll('.speed-btn').forEach(btn => {
+        btn.classList.toggle('active', parseFloat(btn.dataset.speed) === timeScale);
+    });
+});
+
+document.querySelectorAll('.speed-btn').forEach(btn => {
+    btn.addEventListener('click', () => setTimeScale(parseFloat(btn.dataset.speed)));
+});
+
+document.getElementById('btnLaunch').addEventListener('click', () => {
+    if (!deuteriumAssembled || !tritiumAssembled || reactionTriggered) return;
+
+    let velocityScale = 2.2;
+
+    nucleons.forEach(n => {
+        let computedSpeed = Math.sqrt((2 * currentKeV) / n.mass) * velocityScale;
+
+        if (n.x < canvas.width / 2) {
+            n.vx = computedSpeed;
+            n.vy = (Math.random() - 0.5) * 0.5;
+        } else {
+            n.vx = -computedSpeed;
+            n.vy = (Math.random() - 0.5) * 0.5;
+        }
+        n.damping = 1.0;
+    });
+
+    reactionTriggered = true;
+    document.getElementById('btnLaunch').disabled = true;
+});
+
+document.getElementById('btnReset').addEventListener('click', resetEngineEnvironment);
+
+function evalLaunchVerification() {
+    if (deuteriumAssembled && tritiumAssembled && !reactionTriggered) {
+        document.getElementById('btnLaunch').disabled = false;
+    }
+}
+
+function resetEngineEnvironment() {
+    nucleons = [];
+    photons = [];
+    deuteriumAssembled = false;
+    tritiumAssembled = false;
+    reactionTriggered = false;
+    document.getElementById('btnLaunch').disabled = true;
+}
+
+// -------------------------------------------------------------
+// Global Simulation Physics Engine Loop
+// -------------------------------------------------------------
+
+function mainSimulationEngine() {
+    // Structural Clear Frame Layering to permit vector trails
+    ctx.fillStyle = 'rgba(2, 6, 23, 0.3)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // 1. Process Structural Force Computations across standard Nucleon spaces
+    for (let i = 0; i < nucleons.length; i++) {
+        for (let j = i + 1; j < nucleons.length; j++) {
+            applyNuclearForces(nucleons[i], nucleons[j]);
+        }
+    }
+
+    // 2. Perform Integration, Damping, Mapping and Photon Emmision
+    nucleons.forEach(n => {
+        processKineticDampingAndRadiation(n, photons);
+        n.draw(ctx);
+    });
+
+    // 3. Process Active Photon State Arrays
+    photons = photons.filter(p => p.life > 0);
+    photons.forEach(p => {
+        p.update();
+        p.draw(ctx);
+    });
+
+    // 4. Dynamic Molecular Registration Trigger
+    if (reactionTriggered && nucleons.length === 5 && !nucleons.some(n => n.isPartOfAlpha)) {
+        let avgX = nucleons.reduce((sum, n) => sum + n.x, 0) / 5;
+        let avgY = nucleons.reduce((sum, n) => sum + n.y, 0) / 5;
+
+        let maximumSpread = 0;
+        nucleons.forEach(n => {
+            let d = Math.sqrt((n.x - avgX)**2 + (n.y - avgY)**2);
+            if (d > maximumSpread) maximumSpread = d;
+        });
+
+        if (maximumSpread < 30) {
+            let neutrons = nucleons.filter(n => n.type === 'neutron');
+            neutrons.sort((a, b) => {
+                let distA = Math.sqrt((a.x - avgX)**2 + (a.y - avgY)**2);
+                let distB = Math.sqrt((b.x - avgX)**2 + (b.y - avgY)**2);
+                return distB - distA;
+            });
+
+            let escapeNeutronID = neutrons[0].id;
+
+            nucleons.forEach(n => {
+                if (n.id === escapeNeutronID) {
+                    n.isEjectedNeutron = true;
+                    let angle = Math.atan2(n.y - avgY, n.x - avgX);
+                    n.vx += Math.cos(angle) * 16.0;
+                    n.vy += Math.sin(angle) * 16.0;
+                } else {
+                    n.isPartOfAlpha = true;
+                    let angle = Math.atan2(n.y - avgY, n.x - avgX);
+                    n.vx -= Math.cos(angle) * 4.0;
+                    n.vy -= Math.sin(angle) * 4.0;
+                }
+            });
+
+            for (let i = 0; i < 24; i++) {
+                photons.push(new Photon(avgX, avgY, (i / 24) * Math.PI * 2));
+            }
+
+            reactionTriggered = false;
+        }
+    }
+
+    // 5. Coulomb bounce detection — re-enable launch if clusters repel
+    if (reactionTriggered && nucleons.length > 0 && !nucleons.some(n => n.isPartOfAlpha)) {
+        let deuMovingLeft = nucleons.some(n => n.x < canvas.width/2 && n.vx < 0);
+        let triMovingRight = nucleons.some(n => n.x > canvas.width/2 && n.vx > 0);
+
+        if (deuMovingLeft || triMovingRight) {
+            nucleons.forEach(n => n.damping = 0.92);
+            reactionTriggered = false;
+            document.getElementById('btnLaunch').disabled = false;
+        }
+    }
+
+    requestAnimationFrame(mainSimulationEngine);
+}
+
+function processKineticDampingAndRadiation(nucleon, photonArray) {
+    let initialSpeedSq = (nucleon.vx * nucleon.vx) + (nucleon.vy * nucleon.vy);
+    let keInitial = 0.5 * nucleon.mass * initialSpeedSq;
+
+    let effectiveDamping = Math.pow(nucleon.damping, timeScale);
+    nucleon.vx *= effectiveDamping;
+    nucleon.vy *= effectiveDamping;
+
+    let finalSpeedSq = (nucleon.vx * nucleon.vx) + (nucleon.vy * nucleon.vy);
+    let keFinal = 0.5 * nucleon.mass * finalSpeedSq;
+
+    let energyLost = keInitial - keFinal;
+    let threshold = 0.5;
+
+    if (energyLost > threshold) {
+        let angle = Math.atan2(nucleon.vy, nucleon.vx) + Math.PI;
+        photonArray.push(new Photon(nucleon.x, nucleon.y, angle));
+    }
+
+    nucleon.x += nucleon.vx * timeScale;
+    nucleon.y += nucleon.vy * timeScale;
+
+    let padding = nucleon.radius;
+    if (nucleon.x < padding) { nucleon.x = padding; nucleon.vx = 0; }
+    if (nucleon.x > 900 - padding) { nucleon.x = 900 - padding; nucleon.vx = 0; }
+    if (nucleon.y < padding) { nucleon.y = padding; nucleon.vy = 0; }
+    if (nucleon.y > 550 - padding) { nucleon.y = 550 - padding; nucleon.vy = 0; }
+}
+
+function applyNuclearForces(n1, n2) {
+    let dx = n2.x - n1.x;
+    let dy = n2.y - n1.y;
+    let r = Math.sqrt(dx * dx + dy * dy);
+
+    if (r < 0.1) return;
+
+    let k_e = 200;
+    let k_s = 800;
+    let overlap_strength = 1000;
+
+    if (n1.isPartOfAlpha && n2.isPartOfAlpha) {
+        k_s = 6000;
+        overlap_strength = 3000;
+    }
+
+    if (n1.isEjectedNeutron || n2.isEjectedNeutron) {
+        k_s = 0;
+        k_e = 0;
+        overlap_strength = 2000;
+    }
+
+    let f_coulomb = (k_e * n1.charge * n2.charge) / (r * r);
+
+    let f_strong = 0;
+    if (r < 40) {
+        f_strong = -k_s / (r * r * r);
+    }
+
+    let f_overlap = 0;
+    let min_distance = n1.radius + n2.radius;
+    if (r < min_distance) {
+        f_overlap = overlap_strength * (min_distance - r);
+    }
+
+    let f_total = f_coulomb + f_strong + f_overlap;
+
+    let fx = (dx / r) * f_total;
+    let fy = (dy / r) * f_total;
+
+    n1.vx += (fx / n1.mass) * timeScale;
+    n1.vy += (fy / n1.mass) * timeScale;
+    n2.vx -= (fx / n2.mass) * timeScale;
+    n2.vy -= (fy / n2.mass) * timeScale;
+}
+
+// Initiate the simulation pipeline engine
+mainSimulationEngine();
+</script>
+</body>
+</html>
