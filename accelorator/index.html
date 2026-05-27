@@ -704,6 +704,12 @@
 
                 ctx.restore();
 
+                let totalKE = 0;
+                cluster.members.forEach(m => { totalKE += m.kineticEnergy(); });
+                const energyStr = totalKE >= 1.0
+                    ? totalKE.toFixed(2) + ' MeV'
+                    : (totalKE * 1000).toFixed(1) + ' keV';
+
                 let topY = Infinity;
                 points.forEach(p => { if (p.y < topY) topY = p.y; });
                 const labelY = topY - PADDING - 14;
@@ -722,6 +728,10 @@
                 ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
                 ctx.shadowBlur = 0;
                 ctx.fillText(cluster.isotope.name, cluster.cx, labelY + 13);
+
+                ctx.font = 'bold 11px monospace';
+                ctx.fillStyle = '#e2e8f0';
+                ctx.fillText(energyStr, cluster.cx, labelY + 25);
 
                 ctx.restore();
             }
