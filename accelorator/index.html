@@ -412,6 +412,10 @@
             <div class="legend-field" style="background:#3b82f6;"></div>
             <span>Magnetic Confinement (B⊙)</span>
         </div>
+        <div class="legend-item">
+            <div class="legend-field" style="background:#06b6d4; border: 1px dashed #06b6d4;"></div>
+            <span>Isotope Cluster</span>
+        </div>
     </div>
 
     <div id="energyGraphContainer">
@@ -428,7 +432,7 @@
 
     <script src="physics.js"></script>
     <script>
-        const { Nucleon, Photon, rotateCluster, computeStrongForceReadout, step: physicsStep, MAGNETIC_ZONE } = FusionPhysics;
+        const { Nucleon, Photon, rotateCluster, computeStrongForceReadout, findBoundClusters, convexHull, step: physicsStep, MAGNETIC_ZONE } = FusionPhysics;
 
         const canvas = document.getElementById('physicsCanvas');
         const ctx = canvas.getContext('2d');
@@ -540,6 +544,7 @@
             ctx.fillStyle = '#020617';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             drawMagneticField();
+            drawIsotopeOverlays();
             sim.nucleons.forEach(n => n.draw(ctx));
             sim.photons.forEach(p => p.draw(ctx));
             drawNeutronEscape();
@@ -626,6 +631,100 @@
             ctx.textAlign = 'center';
             ctx.fillText('n\u2070 escaped confinement', canvas.width / 2, canvas.height - 40);
             ctx.restore();
+        }
+
+        function drawRoundedHull(ctx, points, padding) {
+            if (points.length === 0) return;
+            ctx.beginPath();
+            if (points.length === 1) {
+                ctx.arc(points[0].x, points[0].y, padding, 0, Math.PI * 2);
+                return;
+            }
+            const hull = convexHull(points);
+            if (hull.length <= 1) {
+                ctx.arc(hull[0].x, hull[0].y, padding, 0, Math.PI * 2);
+                return;
+            }
+            if (hull.length === 2) {
+                const angle = Math.atan2(hull[1].y - hull[0].y, hull[1].x - hull[0].x);
+                ctx.arc(hull[0].x, hull[0].y, padding, angle + Math.PI / 2, angle - Math.PI / 2, false);
+                ctx.arc(hull[1].x, hull[1].y, padding, angle - Math.PI / 2, angle + Math.PI / 2, false);
+                ctx.closePath();
+                return;
+            }
+            const h = hull.length;
+            for (let i = 0; i < h; i++) {
+                const prev = hull[(i - 1 + h) % h];
+                const curr = hull[i];
+                const next = hull[(i + 1) % h];
+                const normIn = Math.atan2(curr.y - prev.y, curr.x - prev.x) - Math.PI / 2;
+                const normOut = Math.atan2(next.y - curr.y, next.x - curr.x) - Math.PI / 2;
+                ctx.arc(curr.x, curr.y, padding, normIn, normOut, false);
+            }
+            ctx.closePath();
+        }
+
+        const CLUSTER_COLORS = [
+            { stroke: '#06b6d4', fill: 'rgba(6, 182, 212, 0.06)', glow: 'rgba(6, 182, 212, 0.4)' },
+            { stroke: '#a78bfa', fill: 'rgba(167, 139, 250, 0.06)', glow: 'rgba(167, 139, 250, 0.4)' },
+            { stroke: '#f472b6', fill: 'rgba(244, 114, 182, 0.06)', glow: 'rgba(244, 114, 182, 0.4)' },
+            { stroke: '#34d399', fill: 'rgba(52, 211, 153, 0.06)', glow: 'rgba(52, 211, 153, 0.4)' },
+            { stroke: '#fbbf24', fill: 'rgba(251, 191, 36, 0.06)', glow: 'rgba(251, 191, 36, 0.4)' },
+        ];
+
+        function drawIsotopeOverlays() {
+            const clusters = findBoundClusters(sim.nucleons);
+            let colorIdx = 0;
+
+            for (const cluster of clusters) {
+                if (cluster.members.length < 2) continue;
+
+                const points = cluster.members.map(m => ({ x: m.x, y: m.y }));
+                const colors = CLUSTER_COLORS[colorIdx % CLUSTER_COLORS.length];
+                colorIdx++;
+
+                const PADDING = 22;
+
+                ctx.save();
+
+                ctx.shadowColor = colors.glow;
+                ctx.shadowBlur = 12;
+                drawRoundedHull(ctx, points, PADDING);
+                ctx.fillStyle = colors.fill;
+                ctx.fill();
+
+                ctx.shadowBlur = 6;
+                ctx.strokeStyle = colors.stroke;
+                ctx.lineWidth = 2;
+                ctx.setLineDash([6, 4]);
+                ctx.globalAlpha = 0.8;
+                drawRoundedHull(ctx, points, PADDING);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                ctx.restore();
+
+                let topY = Infinity;
+                points.forEach(p => { if (p.y < topY) topY = p.y; });
+                const labelY = topY - PADDING - 14;
+
+                ctx.save();
+                ctx.shadowColor = colors.glow;
+                ctx.shadowBlur = 8;
+
+                ctx.font = 'bold 14px monospace';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+                ctx.fillStyle = colors.stroke;
+                ctx.fillText(cluster.isotope.symbol, cluster.cx, labelY);
+
+                ctx.font = '10px sans-serif';
+                ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
+                ctx.shadowBlur = 0;
+                ctx.fillText(cluster.isotope.name, cluster.cx, labelY + 13);
+
+                ctx.restore();
+            }
         }
 
         function drawHUD() {
@@ -850,6 +949,7 @@
 
             lastStepInfo = physicsStep(sim, canvas.width, canvas.height);
 
+            drawIsotopeOverlays();
             sim.nucleons.forEach(n => n.draw(ctx));
 
             sim.photons = sim.photons.filter(p => p.life > 0);

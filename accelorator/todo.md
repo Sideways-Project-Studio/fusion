@@ -1,0 +1,1 @@
+make the heluim and nutron force apart as a seperate event

@@ -465,12 +465,111 @@ const FusionPhysics = (() => {
         return { dt, adaptiveFactor, minDist };
     }
 
+    const ELEMENTS = ['n', 'H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne'];
+    const SUPERSCRIPTS = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
+
+    function toSuperscript(num) {
+        return String(num).split('').map(d => SUPERSCRIPTS[parseInt(d)]).join('');
+    }
+
+    const COMMON_ISOTOPE_NAMES = {
+        '0-1': 'Neutron', '0-2': 'Dineutron', '0-3': 'Trineutron',
+        '1-0': 'Protium', '1-1': 'Deuterium', '1-2': 'Tritium',
+        '2-1': 'Helium-3', '2-2': 'Helium-4 (α)', '2-3': 'Helium-5',
+        '3-3': 'Lithium-6', '3-4': 'Lithium-7',
+        '4-5': 'Beryllium-9', '5-6': 'Boron-11', '6-6': 'Carbon-12',
+    };
+
+    function identifyIsotope(protonCount, neutronCount) {
+        const massNumber = protonCount + neutronCount;
+        const element = protonCount < ELEMENTS.length ? ELEMENTS[protonCount] : `E${protonCount}`;
+        const symbol = toSuperscript(massNumber) + element;
+        const key = `${protonCount}-${neutronCount}`;
+        const name = COMMON_ISOTOPE_NAMES[key] || `${element}-${massNumber}`;
+        return { symbol, name, massNumber, protonCount, neutronCount };
+    }
+
+    const BINDING_DISTANCE = 45;
+
+    function findBoundClusters(nucleons) {
+        const n = nucleons.length;
+        if (n === 0) return [];
+
+        const parent = Array.from({ length: n }, (_, i) => i);
+        const rank = new Array(n).fill(0);
+
+        function find(x) {
+            while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+            return x;
+        }
+        function union(a, b) {
+            a = find(a); b = find(b);
+            if (a === b) return;
+            if (rank[a] < rank[b]) { let t = a; a = b; b = t; }
+            parent[b] = a;
+            if (rank[a] === rank[b]) rank[a]++;
+        }
+
+        for (let i = 0; i < n; i++) {
+            for (let j = i + 1; j < n; j++) {
+                const dx = nucleons[i].x - nucleons[j].x;
+                const dy = nucleons[i].y - nucleons[j].y;
+                if (Math.sqrt(dx * dx + dy * dy) < BINDING_DISTANCE) {
+                    union(i, j);
+                }
+            }
+        }
+
+        const groups = {};
+        for (let i = 0; i < n; i++) {
+            const root = find(i);
+            if (!groups[root]) groups[root] = [];
+            groups[root].push(i);
+        }
+
+        return Object.values(groups).map(indices => {
+            const members = indices.map(i => nucleons[i]);
+            const protons = members.filter(m => m.type === 'proton').length;
+            const neutrons = members.filter(m => m.type === 'neutron').length;
+            const isotope = identifyIsotope(protons, neutrons);
+
+            let cx = 0, cy = 0;
+            members.forEach(m => { cx += m.x; cy += m.y; });
+            cx /= members.length;
+            cy /= members.length;
+
+            return { indices, members, protons, neutrons, isotope, cx, cy };
+        });
+    }
+
+    function convexHull(points) {
+        if (points.length <= 2) return points.slice();
+        const pts = points.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+        const cross = (O, A, B) => (A.x - O.x) * (B.y - O.y) - (A.y - O.y) * (B.x - O.x);
+
+        const lower = [];
+        for (const p of pts) {
+            while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+            lower.push(p);
+        }
+        const upper = [];
+        for (let i = pts.length - 1; i >= 0; i--) {
+            while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], pts[i]) <= 0) upper.pop();
+            upper.push(pts[i]);
+        }
+        lower.pop();
+        upper.pop();
+        return lower.concat(upper);
+    }
+
     return {
         Nucleon,
         Photon,
         rotateCluster,
         evaluateFusionState,
         computeStrongForceReadout,
+        findBoundClusters,
+        convexHull,
         step,
         MAGNETIC_ZONE
     };
